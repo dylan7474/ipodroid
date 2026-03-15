@@ -1,0 +1,722 @@
+package com.dylan.ipod
+
+import android.content.Intent
+import android.media.MediaPlayer
+import android.net.Uri
+import android.os.Build
+import android.os.Bundle
+import android.os.Environment
+import android.provider.Settings
+import android.util.Log
+import android.view.WindowManager
+import androidx.activity.ComponentActivity
+import androidx.activity.compose.BackHandler
+import androidx.activity.compose.setContent
+import androidx.activity.enableEdgeToEdge
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import com.dylan.ipod.ui.theme.IpodTheme
+import com.google.gson.Gson
+import io.ktor.http.*
+import io.ktor.serialization.gson.*
+import io.ktor.server.application.*
+import io.ktor.server.engine.*
+import io.ktor.server.cio.*
+import io.ktor.server.plugins.contentnegotiation.*
+import io.ktor.server.plugins.cors.routing.*
+import io.ktor.server.request.*
+import io.ktor.server.response.*
+import io.ktor.server.routing.*
+import kotlinx.coroutines.delay
+import java.io.File
+import java.net.InetAddress
+import java.net.NetworkInterface
+import kotlin.math.PI
+import kotlin.math.atan2
+
+// --- Models for persistence ---
+data class RadioStation(val name: String, val url: String)
+data class LibraryConfig(
+    var musicPath: String = "Music",
+    var audiobooksPath: String = "Audiobooks",
+    var radioStations: MutableList<RadioStation> = mutableListOf(
+        RadioStation("Lofi Girl", "https://stream.live.vc.bbc.co.uk/bbc_radio_one"),
+        RadioStation("KEXP", "https://kexp-mp3-128.streamguys1.com/kexp128.mp3")
+    )
+)
+
+class MainActivity : ComponentActivity() {
+    private lateinit var ipodState: IpodState
+    private var server: ApplicationEngine? = null
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        ipodState = IpodState()
+        
+        // Keep Screen On
+        window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        
+        loadConfig()
+        checkPermissions()
+        startWebServer()
+        startIpodService()
+        
+        enableEdgeToEdge()
+        setContent {
+            IpodTheme {
+                Surface(modifier = Modifier.fillMaxSize(), color = Color(0xFF1A1A1A)) {
+                    IpodApp(ipodState, onSaveConfig = { saveConfig() })
+                }
+            }
+        }
+    }
+
+    private fun startIpodService() {
+        val intent = Intent(this, IpodService::class.java)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            startForegroundService(intent)
+        } else {
+            startService(intent)
+        }
+    }
+
+    private fun checkPermissions() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            if (!Environment.isExternalStorageManager()) {
+                try {
+                    val intent = Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION)
+                    intent.data = Uri.parse("package:${packageName}")
+                    startActivity(intent)
+                } catch (e: Exception) {
+                    val intent = Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION)
+                    startActivity(intent)
+                }
+            }
+        }
+    }
+
+    private fun loadConfig() {
+        val file = File(getExternalFilesDir(null), "config.json")
+        if (file.exists()) {
+            try {
+                val config = Gson().fromJson(file.readText(), LibraryConfig::class.java)
+                ipodState.config = config
+            } catch (e: Exception) {
+                Log.e("IPOD", "Failed to load config", e)
+            }
+        }
+    }
+
+    private fun saveConfig() {
+        val file = File(getExternalFilesDir(null), "config.json")
+        file.writeText(Gson().toJson(ipodState.config))
+    }
+
+    private fun startWebServer() {
+        server = embeddedServer(CIO, port = 8080, host = "0.0.0.0") {
+            install(ContentNegotiation) { gson { } }
+            install(CORS) { anyHost() }
+            routing {
+                get("/") {
+                    val ip = getIpAddress() ?: "localhost"
+                    val stationsRows = ipodState.config.radioStations.mapIndexed { index, station ->
+                        """
+                        <tr>
+                            <td><b>${station.name}</b></td>
+                            <td><code style="font-size: 0.85em; color: #636e72;">${station.url}</code></td>
+                            <td style="text-align: right;">
+                                <form action="/remove-station" method="POST" style="display:inline;">
+                                    <input type="hidden" name="index" value="$index">
+                                    <button type="submit" class="btn-remove">Remove</button>
+                                </form>
+                            </td>
+                        </tr>
+                        """.trimIndent()
+                    }.joinToString("")
+
+                    call.respondText(
+                        """
+                        <!DOCTYPE html>
+                        <html lang="en">
+                        <head>
+                            <meta charset="UTF-8">
+                            <meta name="viewport" content="width=device-width, initial-scale=1.0">
+                            <title>iPod Radio Manager</title>
+                            <style>
+                                :root { --primary: #2d3436; --accent: #0984e3; --danger: #d63031; --bg: #f5f6fa; --card: #ffffff; }
+                                body { font-family: 'Segoe UI', system-ui, -apple-system, sans-serif; background-color: var(--bg); margin: 0; padding: 20px; color: var(--primary); }
+                                .container { max-width: 900px; margin: 0 auto; }
+                                .card { background: var(--card); border-radius: 12px; box-shadow: 0 10px 30px rgba(0,0,0,0.05); padding: 40px; margin-bottom: 20px; }
+                                header { display: flex; justify-content: space-between; align-items: center; border-bottom: 2px solid var(--bg); padding-bottom: 20px; margin-bottom: 30px; }
+                                h1 { margin: 0; font-size: 24px; display: flex; align-items: center; gap: 12px; }
+                                .ip-badge { background: var(--bg); padding: 8px 16px; border-radius: 20px; font-size: 13px; font-weight: bold; color: #636e72; border: 1px solid #dfe6e9; }
+                                table { width: 100%; border-collapse: collapse; margin-top: 10px; }
+                                th { text-align: left; padding: 12px; border-bottom: 2px solid var(--bg); color: #b2bec3; text-transform: uppercase; font-size: 11px; letter-spacing: 1px; }
+                                td { padding: 16px 12px; border-bottom: 1px solid var(--bg); }
+                                .btn-remove { background: #fff; color: var(--danger); border: 1px solid #ff7675; padding: 6px 14px; border-radius: 6px; cursor: pointer; font-size: 12px; font-weight: 600; transition: all 0.2s; }
+                                .btn-remove:hover { background: var(--danger); color: white; }
+                                .add-section { margin-top: 50px; padding: 30px; background: #f8f9fa; border-radius: 10px; border: 1px solid #eee; }
+                                .form-row { display: grid; grid-template-columns: 1fr 2fr auto; gap: 20px; align-items: end; }
+                                .input-group { display: flex; flex-direction: column; gap: 8px; }
+                                label { font-size: 12px; font-weight: 800; color: #636e72; text-transform: uppercase; }
+                                input { padding: 12px; border: 1px solid #dfe6e9; border-radius: 8px; font-size: 14px; transition: border 0.2s; }
+                                input:focus { outline: none; border-color: var(--accent); background: white; }
+                                .btn-add { background: var(--accent); color: white; border: none; padding: 0 30px; border-radius: 8px; cursor: pointer; font-weight: bold; height: 44px; transition: 0.2s; }
+                                .btn-add:hover { background: #074b83; transform: translateY(-1px); }
+                                .footer { text-align: center; color: #b2bec3; font-size: 13px; margin-top: 50px; }
+                                .hint { font-size: 13px; color: #636e72; margin-top: 10px; line-height: 1.5; }
+                            </style>
+                        </head>
+                        <body>
+                            <div class="container">
+                                <div class="card">
+                                    <header>
+                                        <h1>📻 iPod Radio Station Manager</h1>
+                                        <div class="ip-badge">Device IP: $ip</div>
+                                    </header>
+
+                                    <table>
+                                        <thead>
+                                            <tr>
+                                                <th>Station Name</th>
+                                                <th>Stream URL</th>
+                                                <th style="text-align: right;">Action</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody>
+                                            $stationsRows
+                                            ${if (ipodState.config.radioStations.isEmpty()) "<tr><td colspan='3' style='text-align:center; padding: 60px; color: #b2bec3;'>No stations configured. Use the form below to add your first stream.</td></tr>" else ""}
+                                        </tbody>
+                                    </table>
+
+                                    <div class="add-section">
+                                        <h2 style="font-size: 16px; margin-bottom: 20px; text-transform: uppercase; color: #2d3436;">Add New Stream</h2>
+                                        <form action="/add-station" method="POST" class="form-row">
+                                            <div class="input-group">
+                                                <label>Display Name</label>
+                                                <input type="text" name="name" placeholder="BBC Radio 1" required>
+                                            </div>
+                                            <div class="input-group">
+                                                <label>Stream URL (Direct MP3/AAC Link)</label>
+                                                <input type="text" name="url" placeholder="https://..." required>
+                                            </div>
+                                            <button type="submit" class="btn-add">Add Station</button>
+                                        </form>
+                                        <p class="hint"><b>Tip:</b> Make sure the URL points to a direct audio stream. Web player URLs will not work.</p>
+                                    </div>
+                                </div>
+                                <div class="footer">
+                                    iPod Classic Management Terminal &bull; Local Access Only
+                                </div>
+                            </div>
+                        </body>
+                        </html>
+                        """.trimIndent(),
+                        ContentType.Text.Html
+                    )
+                }
+                post("/add-station") {
+                    val params = call.receiveParameters()
+                    val name = params["name"]?.trim() ?: ""
+                    val url = params["url"]?.trim() ?: ""
+                    if (name.isNotEmpty() && url.isNotEmpty()) {
+                        ipodState.config.radioStations.add(RadioStation(name, url))
+                        saveConfig()
+                    }
+                    call.respondRedirect("/")
+                }
+                post("/remove-station") {
+                    val params = call.receiveParameters()
+                    val index = params["index"]?.toIntOrNull()
+                    if (index != null && index in ipodState.config.radioStations.indices) {
+                        ipodState.config.radioStations.removeAt(index)
+                        saveConfig()
+                    }
+                    call.respondRedirect("/")
+                }
+            }
+        }.start(wait = false)
+        ipodState.ipAddress = getIpAddress()
+    }
+
+    private fun getIpAddress(): String? {
+        try {
+            val interfaces = NetworkInterface.getNetworkInterfaces()
+            while (interfaces.hasMoreElements()) {
+                val iface = interfaces.nextElement()
+                val addresses = iface.inetAddresses
+                while (addresses.hasMoreElements()) {
+                    val addr = addresses.nextElement()
+                    if (!addr.isLoopbackAddress && addr is InetAddress && addr.address.size == 4) {
+                        return addr.hostAddress
+                    }
+                }
+            }
+        } catch (e: Exception) { }
+        return null
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        server?.stop(1000, 2000)
+        ipodState.releasePlayer()
+    }
+}
+
+// --- State Management ---
+
+class IpodState {
+    var config by mutableStateOf(LibraryConfig())
+    var ipAddress by mutableStateOf<String?>(null)
+    
+    var menuStack = mutableStateListOf("main")
+    var selectedIndex by mutableIntStateOf(0)
+    var isNowPlaying by mutableStateOf(false)
+    var isAdjustingMix by mutableStateOf(false)
+    var currentTrack by mutableStateOf<Track?>(null)
+    var playbackProgress by mutableFloatStateOf(0.0f)
+    var noiseLevel by mutableFloatStateOf(0.33f)
+    var isNoiseOn by mutableStateOf(false)
+    var noiseType by mutableStateOf("White")
+
+    // Folder Picker State
+    var isPickingFolder by mutableStateOf(false)
+    var pickingTarget by mutableStateOf("") // "Music" or "Audiobooks"
+    var currentPickPath by mutableStateOf("") // Path relative to root
+
+    // Media Player
+    private var mediaPlayer: MediaPlayer? = null
+    private val audioExtensions = listOf("mp3", "flac", "m4a", "wav", "ogg")
+
+    fun getCurrentItems(): List<String> {
+        if (isPickingFolder) {
+            val items = scanFolder(currentPickPath, foldersOnly = true).toMutableList()
+            items.add(0, "[ SELECT CURRENT FOLDER ]")
+            return items
+        }
+
+        val currentView = menuStack.last()
+        return when (currentView) {
+            "main" -> listOf("Music", "Audiobooks", "Radio", "Mixer", "Settings")
+            "Radio" -> config.radioStations.map { it.name }
+            "Mixer" -> listOf(
+                "Noise: ${if (isNoiseOn) "On" else "Off"}",
+                "Type: $noiseType",
+                "Mix: ${(noiseLevel * 100).toInt()}% Stream"
+            )
+            "Settings" -> listOf(
+                "Set Music Folder",
+                "Set Audiobooks Folder",
+                "Connect: ${ipAddress ?: "No IP"}:8080",
+                "About",
+                "Sleep Timer"
+            )
+            "Music" -> scanFolder(config.musicPath)
+            "Audiobooks" -> scanFolder(config.audiobooksPath)
+            else -> scanFolder(currentView) // Subfolder navigation
+        }
+    }
+
+    private fun scanFolder(path: String, foldersOnly: Boolean = false): List<String> {
+        val root = Environment.getExternalStorageDirectory()
+        val dir = if (path.isEmpty()) root else File(root, path)
+        
+        Log.d("IPOD", "Scanning: ${dir.absolutePath} (foldersOnly=$foldersOnly)")
+        
+        if (!dir.exists() || !dir.isDirectory) {
+            Log.e("IPOD", "Not a directory: ${dir.absolutePath}")
+            return listOf("Empty / Not Found")
+        }
+        
+        val allFiles = dir.listFiles()
+        if (allFiles == null) {
+            Log.e("IPOD", "listFiles() is null. Permission issue?")
+            return listOf("Access Denied")
+        }
+
+        val filtered = allFiles.filter { file ->
+            if (foldersOnly) {
+                file.isDirectory
+            } else {
+                file.isDirectory || audioExtensions.any { ext -> file.name.lowercase().endsWith(".$ext") }
+            }
+        }
+        
+        Log.d("IPOD", "Found ${filtered.size} items")
+
+        return filtered
+            .map { it.name }
+            .sortedWith(compareBy({ !File(dir, it).isDirectory }, { it.lowercase() }))
+    }
+
+    fun handleSelect(onSave: () -> Unit) {
+        if (isPickingFolder) {
+            val items = getCurrentItems()
+            val item = items[selectedIndex]
+            if (item == "[ SELECT CURRENT FOLDER ]") {
+                if (pickingTarget == "Music") config.musicPath = currentPickPath
+                else config.audiobooksPath = currentPickPath
+                isPickingFolder = false
+                onSave()
+                selectedIndex = 0
+            } else {
+                currentPickPath = if (currentPickPath.isEmpty()) item else "$currentPickPath/$item"
+                selectedIndex = 0
+            }
+            return
+        }
+
+        if (isAdjustingMix) {
+            isAdjustingMix = false
+            return
+        }
+        val items = getCurrentItems()
+        if (items.isEmpty() || items[0] == "Empty / Not Found" || items[0] == "Access Denied") return
+        val item = items[selectedIndex]
+        val currentView = menuStack.last()
+        
+        when (currentView) {
+            "main" -> {
+                menuStack.add(item)
+                selectedIndex = 0
+            }
+            "Settings" -> {
+                when (item) {
+                    "Set Music Folder" -> {
+                        isPickingFolder = true
+                        pickingTarget = "Music"
+                        currentPickPath = ""
+                        selectedIndex = 0
+                    }
+                    "Set Audiobooks Folder" -> {
+                        isPickingFolder = true
+                        pickingTarget = "Audiobooks"
+                        currentPickPath = ""
+                        selectedIndex = 0
+                    }
+                }
+            }
+            "Radio" -> {
+                val station = config.radioStations[selectedIndex]
+                playSource(station.url, station.name, "Radio Stream")
+            }
+            "Mixer" -> {
+                when {
+                    item.startsWith("Mix:") -> isAdjustingMix = true
+                    item.startsWith("Noise:") -> isNoiseOn = !isNoiseOn
+                    item.startsWith("Type:") -> noiseType = if (noiseType == "White") "Blue" else "White"
+                }
+            }
+            "Music", "Audiobooks" -> {
+                val basePath = if (currentView == "Music") config.musicPath else config.audiobooksPath
+                val file = File(File(Environment.getExternalStorageDirectory(), basePath), item)
+                if (file.isDirectory) {
+                    menuStack.add("$basePath/$item")
+                    selectedIndex = 0
+                } else {
+                    playSource(file.absolutePath, item, currentView)
+                }
+            }
+            else -> {
+                val file = File(File(Environment.getExternalStorageDirectory(), currentView), item)
+                if (file.isDirectory) {
+                    menuStack.add("${currentView}/$item")
+                    selectedIndex = 0
+                } else {
+                    playSource(file.absolutePath, item, currentView)
+                }
+            }
+        }
+    }
+
+    private fun playSource(source: String, name: String, album: String) {
+        try {
+            mediaPlayer?.stop()
+            mediaPlayer?.release()
+            mediaPlayer = MediaPlayer().apply {
+                setDataSource(source)
+                prepareAsync()
+                setOnPreparedListener { 
+                    start()
+                    isNowPlaying = true
+                }
+                setOnCompletionListener { isNowPlaying = false }
+                setOnErrorListener { _, _, _ -> isNowPlaying = false; true }
+            }
+            currentTrack = Track(name, "iPod Player", album)
+        } catch (e: Exception) {
+            Log.e("IPOD", "Playback failed", e)
+        }
+    }
+
+    fun togglePlay() {
+        mediaPlayer?.let {
+            if (it.isPlaying) it.pause() else it.start()
+        }
+    }
+
+    fun seek(seconds: Int) {
+        mediaPlayer?.let {
+            val newPos = it.currentPosition + (seconds * 1000)
+            it.seekTo(newPos.coerceIn(0, it.duration))
+        }
+    }
+
+    fun updateProgress() {
+        mediaPlayer?.let {
+            if (it.isPlaying && it.duration > 0) {
+                playbackProgress = it.currentPosition.toFloat() / it.duration.toFloat()
+            }
+        }
+    }
+
+    fun releasePlayer() {
+        mediaPlayer?.release()
+        mediaPlayer = null
+    }
+
+    fun handleBack() {
+        if (isPickingFolder) {
+            if (currentPickPath.contains("/")) {
+                currentPickPath = currentPickPath.substringBeforeLast("/")
+            } else if (currentPickPath.isNotEmpty()) {
+                currentPickPath = ""
+            } else {
+                isPickingFolder = false
+            }
+            selectedIndex = 0
+            return
+        }
+
+        if (isAdjustingMix) {
+            isAdjustingMix = false
+        } else if (isNowPlaying) {
+            isNowPlaying = false
+        } else if (menuStack.size > 1) {
+            menuStack.removeAt(menuStack.size - 1)
+            selectedIndex = 0
+        }
+    }
+
+    fun handleMove(delta: Int) {
+        if (isAdjustingMix) {
+            noiseLevel = (noiseLevel + delta * 0.02f).coerceIn(0f, 1f)
+        } else {
+            val items = getCurrentItems()
+            if (items.isNotEmpty()) {
+                selectedIndex = (selectedIndex + delta + items.size) % items.size
+            }
+        }
+    }
+}
+
+data class Track(val name: String, val artist: String, val album: String)
+
+// --- UI Components ---
+
+@Composable
+fun IpodApp(state: IpodState, onSaveConfig: () -> Unit) {
+    BackHandler(enabled = state.menuStack.size > 1 || state.isNowPlaying || state.isPickingFolder) {
+        state.handleBack()
+    }
+
+    LaunchedEffect(state.isNowPlaying) {
+        while (state.isNowPlaying) {
+            state.updateProgress()
+            delay(500)
+        }
+    }
+
+    Box(
+        modifier = Modifier.fillMaxSize(),
+        contentAlignment = Alignment.Center
+    ) {
+        Column(
+            modifier = Modifier
+                .width(340.dp)
+                .height(640.dp)
+                .clip(RoundedCornerShape(40.dp))
+                .background(
+                    Brush.verticalGradient(
+                        colors = listOf(Color(0xFFE6E6E6), Color(0xFFBCBCBC))
+                    )
+                )
+                .padding(25.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            IpodScreen(state)
+            Spacer(modifier = Modifier.weight(1f))
+            ClickWheel(
+                onScroll = { state.handleMove(it) },
+                onMenu = { state.handleBack() },
+                onSelect = { state.handleSelect(onSaveConfig) },
+                onPlayPause = { state.togglePlay() },
+                onForward = { state.seek(30) },
+                onBackward = { state.seek(-15) }
+            )
+            Spacer(modifier = Modifier.height(20.dp))
+        }
+    }
+}
+
+@Composable
+fun IpodScreen(state: IpodState) {
+    val screenBg = Color(0xFFB4C3B0)
+    val screenText = Color(0xFF2D3436)
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(260.dp)
+            .border(4.dp, Color(0xFF333333), RoundedCornerShape(8.dp))
+            .clip(RoundedCornerShape(8.dp))
+            .background(screenBg)
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(Color.Black.copy(alpha = 0.1f))
+                .padding(horizontal = 10.dp, vertical = 4.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            val title = when {
+                state.isPickingFolder -> "Pick ${state.pickingTarget} Folder"
+                state.isNowPlaying -> "Now Playing"
+                else -> state.menuStack.last().split("/").last().replaceFirstChar { it.uppercase() }
+            }
+            Text(text = title, fontSize = 14.sp, fontWeight = FontWeight.Bold, color = screenText, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+            Text(text = "80%", fontSize = 12.sp, color = screenText)
+        }
+
+        Box(modifier = Modifier.fillMaxSize()) {
+            if (state.isAdjustingMix) {
+                AdjustmentView(state.noiseLevel, screenText)
+            } else if (state.isNowPlaying) {
+                NowPlayingView(state, screenText)
+            } else {
+                val items = state.getCurrentItems()
+                val listState = rememberLazyListState()
+                
+                LaunchedEffect(state.selectedIndex, state.isPickingFolder, state.currentPickPath) {
+                    if (items.isNotEmpty()) {
+                        listState.scrollToItem(state.selectedIndex)
+                    }
+                }
+
+                LazyColumn(state = listState) {
+                    itemsIndexed(items) { index, item ->
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .background(if (index == state.selectedIndex) screenText else Color.Transparent)
+                                .padding(horizontal = 12.dp, vertical = 6.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = item,
+                                fontSize = 16.sp,
+                                fontWeight = if (item.startsWith("[ SELECT")) FontWeight.Bold else FontWeight.SemiBold,
+                                color = if (index == state.selectedIndex) screenBg else screenText,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.weight(1f)
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun NowPlayingView(state: IpodState, textColor: Color) {
+    Column(
+        modifier = Modifier.fillMaxSize().padding(15.dp),
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        Text(text = state.currentTrack?.album ?: "", fontSize = 14.sp, color = textColor.copy(alpha = 0.6f))
+        Text(text = state.currentTrack?.name ?: "Unknown", fontSize = 18.sp, fontWeight = FontWeight.Bold, color = textColor, textAlign = TextAlign.Center, maxLines = 2, overflow = TextOverflow.Ellipsis)
+        Text(text = state.currentTrack?.artist ?: "", fontSize = 16.sp, color = textColor, textAlign = TextAlign.Center)
+        Spacer(modifier = Modifier.weight(1f))
+        Box(modifier = Modifier.fillMaxWidth().height(20.dp).border(2.dp, Color(0xFF333333)).background(Color.Black.copy(alpha = 0.1f))) {
+            Box(modifier = Modifier.fillMaxHeight().fillMaxWidth(state.playbackProgress).background(Color(0xFF333333)))
+        }
+    }
+}
+
+@Composable
+fun AdjustmentView(level: Float, textColor: Color) {
+    Column(modifier = Modifier.fillMaxSize().padding(20.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
+        Text("Stream Volume", fontSize = 10.sp, fontWeight = FontWeight.Bold, color = textColor.copy(alpha = 0.6f))
+        Text("${(level * 100).toInt()}%", fontSize = 32.sp, fontWeight = FontWeight.Bold, color = textColor)
+        Spacer(modifier = Modifier.height(10.dp))
+        Box(modifier = Modifier.fillMaxWidth().height(20.dp).border(2.dp, Color(0xFF333333)).background(Color.Black.copy(alpha = 0.1f))) {
+            Box(modifier = Modifier.fillMaxHeight().fillMaxWidth(level).background(Color(0xFF333333)))
+        }
+    }
+}
+
+@Composable
+fun ClickWheel(onScroll: (Int) -> Unit, onMenu: () -> Unit, onSelect: () -> Unit, onPlayPause: () -> Unit, onForward: () -> Unit, onBackward: () -> Unit) {
+    var lastAngle by remember { mutableFloatStateOf(0f) }
+    var angleAccumulator by remember { mutableFloatStateOf(0f) }
+    val step = 18f 
+
+    Box(
+        modifier = Modifier.size(260.dp).clip(CircleShape).background(Color.White)
+            .pointerInput(Unit) {
+                detectDragGestures(
+                    onDragStart = { offset -> lastAngle = calculateAngle(offset, size.width.toFloat() / 2f, size.height.toFloat() / 2f); angleAccumulator = 0f },
+                    onDrag = { change, _ ->
+                        val currentAngle = calculateAngle(change.position, size.width.toFloat() / 2f, size.height.toFloat() / 2f)
+                        var delta = currentAngle - lastAngle
+                        if (delta > 180f) delta -= 360f else if (delta < -180f) delta += 360f
+                        angleAccumulator += delta
+                        if (kotlin.math.abs(angleAccumulator) >= step) {
+                            val dir = if (angleAccumulator > 0) 1 else -1
+                            onScroll(dir)
+                            angleAccumulator -= step * dir
+                        }
+                        lastAngle = currentAngle
+                    }
+                )
+            },
+        contentAlignment = Alignment.Center
+    ) {
+        Text("MENU", Modifier.align(Alignment.TopCenter).padding(top = 20.dp).clickable { onMenu() }, fontSize = 18.sp, fontWeight = FontWeight.ExtraBold, color = Color(0xFF888888))
+        Text("▶▶❘", Modifier.align(Alignment.CenterEnd).padding(end = 20.dp).clickable { onForward() }, fontSize = 18.sp, fontWeight = FontWeight.ExtraBold, color = Color(0xFF888888))
+        Text("❘◀◀", Modifier.align(Alignment.CenterStart).padding(start = 20.dp).clickable { onBackward() }, fontSize = 18.sp, fontWeight = FontWeight.ExtraBold, color = Color(0xFF888888))
+        Text("▶❘❘", Modifier.align(Alignment.BottomCenter).padding(bottom = 20.dp).clickable { onPlayPause() }, fontSize = 18.sp, fontWeight = FontWeight.ExtraBold, color = Color(0xFF888888))
+        Box(modifier = Modifier.size(90.dp).clip(CircleShape).background(Brush.verticalGradient(listOf(Color(0xFFF0F0F0), Color(0xFFD9D9D9)))).border(1.dp, Color(0xFFCCCCCC), CircleShape).clickable { onSelect() })
+    }
+}
+
+fun calculateAngle(offset: Offset, centerX: Float, centerY: Float): Float {
+    val x = offset.x - centerX
+    val y = offset.y - centerY
+    return (atan2(y, x) * (180f / PI.toFloat()))
+}
