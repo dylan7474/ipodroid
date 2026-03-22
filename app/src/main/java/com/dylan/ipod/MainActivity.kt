@@ -60,6 +60,7 @@ import kotlinx.coroutines.delay
 import java.io.File
 import java.net.InetAddress
 import java.net.NetworkInterface
+import java.util.Locale
 import kotlin.math.PI
 import kotlin.math.atan2
 
@@ -318,6 +319,8 @@ class IpodState(val onSaveConfig: () -> Unit) {
     var isAdjustingMix by mutableStateOf(false)
     var currentTrack by mutableStateOf<Track?>(null)
     var playbackProgress by mutableFloatStateOf(0.0f)
+    var currentPositionText by mutableStateOf("0:00")
+    var durationText by mutableStateOf("0:00")
     var noiseLevel by mutableFloatStateOf(0.33f)
     var isNoiseOn by mutableStateOf(false)
     var noiseType by mutableStateOf("White")
@@ -631,6 +634,8 @@ class IpodState(val onSaveConfig: () -> Unit) {
             isNowPlaying = true
             currentTrack = Track(name, "iPod Player", album, source)
             playbackProgress = 0f
+            currentPositionText = "0:00"
+            durationText = "0:00"
 
             val oldPlayer = mediaPlayer
             mediaPlayer = null
@@ -698,17 +703,35 @@ class IpodState(val onSaveConfig: () -> Unit) {
         } catch (e: Exception) {}
     }
 
+    private fun formatTime(ms: Int): String {
+        val totalSeconds = ms / 1000
+        val hours = totalSeconds / 3600
+        val minutes = (totalSeconds % 3600) / 60
+        val seconds = totalSeconds % 60
+        return if (hours > 0) {
+            String.format(Locale.getDefault(), "%d:%02d:%02d", hours, minutes, seconds)
+        } else {
+            String.format(Locale.getDefault(), "%d:%02d", minutes, seconds)
+        }
+    }
+
     fun updateProgress() {
         mediaPlayer?.let {
             try {
                 if (it.isPlaying && it.duration > 0) {
                     playbackProgress = it.currentPosition.toFloat() / it.duration.toFloat()
+                    currentPositionText = formatTime(it.currentPosition)
+                    durationText = formatTime(it.duration)
                     
                     // Save audiobook position
                     if (currentTrack?.album?.contains("Audiobooks") == true) {
                         config.audiobookPositions[currentTrack!!.path] = it.currentPosition
                         onSaveConfig()
                     }
+                } else if (it.isPlaying) {
+                    currentPositionText = formatTime(it.currentPosition)
+                    durationText = "Live"
+                    playbackProgress = 0f
                 }
             } catch (e: Exception) {}
         }
@@ -896,6 +919,15 @@ fun NowPlayingView(state: IpodState, textColor: Color) {
         Text(text = state.currentTrack?.name ?: "Unknown", fontSize = 18.sp, fontWeight = FontWeight.Bold, color = textColor, textAlign = TextAlign.Center, maxLines = 2, overflow = TextOverflow.Ellipsis)
         Text(text = state.currentTrack?.artist ?: "", fontSize = 16.sp, color = textColor, textAlign = TextAlign.Center)
         Spacer(modifier = Modifier.weight(1f))
+        
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(bottom = 4.dp),
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Text(text = state.currentPositionText, fontSize = 12.sp, color = textColor, fontWeight = FontWeight.Bold)
+            Text(text = state.durationText, fontSize = 12.sp, color = textColor, fontWeight = FontWeight.Bold)
+        }
+
         Box(modifier = Modifier.fillMaxWidth().height(20.dp).border(2.dp, Color(0xFF333333)).background(Color.Black.copy(alpha = 0.1f))) {
             Box(modifier = Modifier.fillMaxHeight().fillMaxWidth(state.playbackProgress).background(Color(0xFF333333)))
         }
