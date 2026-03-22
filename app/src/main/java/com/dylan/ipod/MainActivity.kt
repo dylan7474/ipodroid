@@ -71,7 +71,8 @@ data class LibraryConfig(
     var radioStations: MutableList<RadioStation> = mutableListOf(
         RadioStation("Lofi Girl", "https://stream.live.vc.bbc.co.uk/bbc_radio_one"),
         RadioStation("KEXP", "https://kexp-mp3-128.streamguys1.com/kexp128.mp3")
-    )
+    ),
+    var audiobookPositions: MutableMap<String, Int> = mutableMapOf()
 )
 
 class MainActivity : ComponentActivity() {
@@ -90,7 +91,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        ipodState = IpodState()
+        ipodState = IpodState(onSaveConfig = { saveConfig() })
         
         // Keep Screen On
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
@@ -307,7 +308,7 @@ class MainActivity : ComponentActivity() {
 
 // --- State Management ---
 
-class IpodState {
+class IpodState(val onSaveConfig: () -> Unit) {
     var config by mutableStateOf(LibraryConfig())
     var ipAddress by mutableStateOf<String?>(null)
     
@@ -628,7 +629,7 @@ class IpodState {
         try {
             // Safety: isNowPlaying set to true early so UI switches to NowPlayingView immediately
             isNowPlaying = true
-            currentTrack = Track(name, "iPod Player", album)
+            currentTrack = Track(name, "iPod Player", album, source)
             playbackProgress = 0f
 
             val oldPlayer = mediaPlayer
@@ -650,10 +651,18 @@ class IpodState {
                 syncVolumes(this)
                 prepareAsync()
                 setOnPreparedListener { 
+                    if (album.contains("Audiobooks")) {
+                        val savedPos = config.audiobookPositions[source] ?: 0
+                        it.seekTo(savedPos)
+                    }
                     start()
                 }
                 setOnCompletionListener { p ->
                     if (mediaPlayer == p) isNowPlaying = false
+                    if (album.contains("Audiobooks")) {
+                        config.audiobookPositions.remove(source)
+                        onSaveConfig()
+                    }
                     p.release()
                 }
                 setOnErrorListener { p, what, extra -> 
@@ -694,6 +703,12 @@ class IpodState {
             try {
                 if (it.isPlaying && it.duration > 0) {
                     playbackProgress = it.currentPosition.toFloat() / it.duration.toFloat()
+                    
+                    // Save audiobook position
+                    if (currentTrack?.album?.contains("Audiobooks") == true) {
+                        config.audiobookPositions[currentTrack!!.path] = it.currentPosition
+                        onSaveConfig()
+                    }
                 }
             } catch (e: Exception) {}
         }
@@ -737,6 +752,8 @@ class IpodState {
         if (isAdjustingMix) {
             noiseLevel = (noiseLevel + delta * 0.02f).coerceIn(0f, 1f)
             syncVolumes()
+        } else if (isNowPlaying && currentTrack?.album?.contains("Audiobooks") == true) {
+            seek(delta * 5) // seek 5 seconds per tick
         } else {
             val items = getCurrentItems()
             if (items.isNotEmpty()) {
@@ -746,7 +763,7 @@ class IpodState {
     }
 }
 
-data class Track(val name: String, val artist: String, val album: String)
+data class Track(val name: String, val artist: String, val album: String, val path: String)
 
 // --- UI Components ---
 
