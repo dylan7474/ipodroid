@@ -1,11 +1,15 @@
 package com.dylan.ipod
 
+import android.content.BroadcastReceiver
+import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.media.AudioAttributes
 import android.media.AudioFormat
 import android.media.AudioTrack
 import android.media.MediaPlayer
 import android.net.Uri
+import android.os.BatteryManager
 import android.os.Build
 import android.os.Bundle
 import android.os.Environment
@@ -74,6 +78,16 @@ class MainActivity : ComponentActivity() {
     private lateinit var ipodState: IpodState
     private var server: ApplicationEngine? = null
 
+    private val batteryReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            val level = intent?.getIntExtra(BatteryManager.EXTRA_LEVEL, -1) ?: -1
+            val scale = intent?.getIntExtra(BatteryManager.EXTRA_SCALE, -1) ?: -1
+            if (level != -1 && scale != -1) {
+                ipodState.batteryLevel = (level * 100 / scale.toFloat()).toInt()
+            }
+        }
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         ipodState = IpodState()
@@ -86,6 +100,8 @@ class MainActivity : ComponentActivity() {
         startWebServer()
         startIpodService()
         
+        registerReceiver(batteryReceiver, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
+
         enableEdgeToEdge()
         setContent {
             IpodTheme {
@@ -285,6 +301,7 @@ class MainActivity : ComponentActivity() {
         super.onDestroy()
         server?.stop(1000, 2000)
         ipodState.releasePlayer()
+        unregisterReceiver(batteryReceiver)
     }
 }
 
@@ -303,6 +320,11 @@ class IpodState {
     var noiseLevel by mutableFloatStateOf(0.33f)
     var isNoiseOn by mutableStateOf(false)
     var noiseType by mutableStateOf("White")
+    var batteryLevel by mutableIntStateOf(100)
+
+    // Sleep Timer State
+    var sleepMinutesRemaining by mutableIntStateOf(0)
+    private var sleepTimerThread: Thread? = null
 
     // Folder Picker State
     var isPickingFolder by mutableStateOf(false)
@@ -430,6 +452,7 @@ class IpodState {
                 "About",
                 "Sleep Timer"
             )
+            "Sleep Timer" -> listOf("Off", "15 Minutes", "30 Minutes", "60 Minutes", "90 Minutes")
             "Music" -> scanFolder(config.musicPath)
             "Audiobooks" -> scanFolder(config.audiobooksPath)
             else -> scanFolder(currentView) // Subfolder navigation
@@ -513,7 +536,23 @@ class IpodState {
                         currentPickPath = ""
                         selectedIndex = 0
                     }
+                    "Sleep Timer" -> {
+                        menuStack.add("Sleep Timer")
+                        selectedIndex = 0
+                    }
                 }
+            }
+            "Sleep Timer" -> {
+                val mins = when (item) {
+                    "15 Minutes" -> 15
+                    "30 Minutes" -> 30
+                    "60 Minutes" -> 60
+                    "90 Minutes" -> 90
+                    else -> 0
+                }
+                setSleepTimer(mins)
+                menuStack.removeAt(menuStack.size - 1)
+                selectedIndex = 0
             }
             "Radio" -> {
                 val station = config.radioStations[selectedIndex]
@@ -557,6 +596,34 @@ class IpodState {
         }
     }
 
+    private fun setSleepTimer(minutes: Int) {
+        sleepTimerThread?.interrupt()
+        sleepMinutesRemaining = minutes
+        if (minutes > 0) {
+            sleepTimerThread = Thread {
+                try {
+                    while (sleepMinutesRemaining > 0) {
+                        Thread.sleep(60000)
+                        sleepMinutesRemaining--
+                    }
+                    // Stop audio stream only
+                    mediaPlayer?.let {
+                        try {
+                            if (it.isPlaying) it.stop()
+                            it.release()
+                        } catch (e: Exception) {}
+                    }
+                    mediaPlayer = null
+                    isNowPlaying = false
+                    // isNoiseOn = false // Keep noise generator running
+                } catch (e: InterruptedException) {}
+            }.apply { 
+                name = "SleepTimerThread"
+                start() 
+            }
+        }
+    }
+
     private fun playSource(source: String, name: String, album: String) {
         try {
             // Safety: isNowPlaying set to true early so UI switches to NowPlayingView immediately
@@ -567,15 +634,17 @@ class IpodState {
             val oldPlayer = mediaPlayer
             mediaPlayer = null
             oldPlayer?.let {
-                try {
-                    it.stop()
-                } catch (e: Exception) {}
-                it.release()
+                Thread {
+                    try {
+                        it.setOnPreparedListener(null)
+                        it.setOnCompletionListener(null)
+                        it.setOnErrorListener(null)
+                        it.release()
+                    } catch (e: Exception) {}
+                }.start()
             }
 
             val newPlayer = MediaPlayer()
-            mediaPlayer = newPlayer
-            
             newPlayer.apply {
                 setDataSource(source)
                 syncVolumes(this)
@@ -583,12 +652,17 @@ class IpodState {
                 setOnPreparedListener { 
                     start()
                 }
-                setOnCompletionListener { isNowPlaying = false }
-                setOnErrorListener { _, what, extra -> 
+                setOnCompletionListener { p ->
+                    if (mediaPlayer == p) isNowPlaying = false
+                    p.release()
+                }
+                setOnErrorListener { p, what, extra -> 
                     Log.e("IPOD", "MediaPlayer Error: $what, $extra")
-                    isNowPlaying = false
+                    if (mediaPlayer == p) isNowPlaying = false
+                    p.release()
                     true 
                 }
+                mediaPlayer = this
             }
         } catch (e: Exception) {
             Log.e("IPOD", "Playback failed", e)
@@ -633,6 +707,7 @@ class IpodState {
             it.release()
         }
         mediaPlayer = null
+        sleepTimerThread?.interrupt()
     }
 
     fun handleBack() {
@@ -747,7 +822,10 @@ fun IpodScreen(state: IpodState) {
                 else -> state.menuStack.last().split("/").last().replaceFirstChar { it.uppercase() }
             }
             Text(text = title, fontSize = 14.sp, fontWeight = FontWeight.Bold, color = screenText, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
-            Text(text = "80%", fontSize = 12.sp, color = screenText)
+            if (state.sleepMinutesRemaining > 0) {
+                Text(text = "🌙 ${state.sleepMinutesRemaining}m", fontSize = 10.sp, color = screenText, modifier = Modifier.padding(end = 4.dp))
+            }
+            Text(text = "${state.batteryLevel}%", fontSize = 12.sp, color = screenText)
         }
 
         Box(modifier = Modifier.fillMaxSize()) {
