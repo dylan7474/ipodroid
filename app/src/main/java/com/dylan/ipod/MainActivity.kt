@@ -1,6 +1,9 @@
 package com.dylan.ipod
 
 import android.content.Intent
+import android.media.AudioAttributes
+import android.media.AudioFormat
+import android.media.AudioTrack
 import android.media.MediaPlayer
 import android.net.Uri
 import android.os.Build
@@ -310,6 +313,100 @@ class IpodState {
     private var mediaPlayer: MediaPlayer? = null
     private val audioExtensions = listOf("mp3", "flac", "m4a", "wav", "ogg")
 
+    // Noise Generator
+    private var noiseTrack: AudioTrack? = null
+    private var noiseThread: Thread? = null
+    @Volatile private var isNoiseThreadRunning = false
+
+    init {
+        startNoiseGenerator()
+    }
+
+    fun startNoiseGenerator() {
+        if (isNoiseThreadRunning) return
+        isNoiseThreadRunning = true
+        noiseThread = Thread {
+            val sampleRate = 44100
+            val minBufSize = AudioTrack.getMinBufferSize(
+                sampleRate,
+                AudioFormat.CHANNEL_OUT_MONO,
+                AudioFormat.ENCODING_PCM_16BIT
+            )
+            
+            try {
+                noiseTrack = AudioTrack.Builder()
+                    .setAudioAttributes(AudioAttributes.Builder()
+                        .setUsage(AudioAttributes.USAGE_MEDIA)
+                        .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
+                        .build())
+                    .setAudioFormat(AudioFormat.Builder()
+                        .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
+                        .setSampleRate(sampleRate)
+                        .setChannelMask(AudioFormat.CHANNEL_OUT_MONO)
+                        .build())
+                    .setBufferSizeInBytes(minBufSize)
+                    .build()
+
+                val buffer = ShortArray(minBufSize)
+                val random = java.util.Random()
+                val pinkRows = 12
+                val pinkValues = DoubleArray(pinkRows)
+                var pinkRunningSum = 0.0
+                var lastWhite = 0.0
+                
+                noiseTrack?.play()
+                
+                while (isNoiseThreadRunning) {
+                    val type = noiseType
+                    val vol = if (isNoiseOn) 1f - noiseLevel else 0f
+                    noiseTrack?.setVolume(vol)
+                    
+                    for (i in buffer.indices) {
+                        val white = random.nextDouble() * 2.0 - 1.0
+                        val sample = when (type) {
+                            "White" -> white
+                            "Pink" -> {
+                                var mask = 1
+                                val r = random.nextInt()
+                                for (j in 0 until pinkRows) {
+                                    if ((r and mask) != 0) {
+                                        pinkRunningSum -= pinkValues[j]
+                                        pinkValues[j] = random.nextDouble() * 2.0 - 1.0
+                                        pinkRunningSum += pinkValues[j]
+                                    }
+                                    mask = mask shl 1
+                                }
+                                (pinkRunningSum + white) / (pinkRows + 1)
+                            }
+                            "Blue" -> {
+                                val blue = white - lastWhite
+                                lastWhite = white
+                                blue * 0.5
+                            }
+                            else -> white
+                        }
+                        // Scale to avoid clipping and harshness
+                        buffer[i] = (sample * 0.4 * Short.MAX_VALUE).toInt().toShort()
+                    }
+                    noiseTrack?.write(buffer, 0, buffer.size)
+                }
+            } catch (e: Exception) {
+                Log.e("IPOD", "Noise generation failed", e)
+            } finally {
+                try {
+                    noiseTrack?.stop()
+                    noiseTrack?.release()
+                } catch (e: Exception) {}
+                noiseTrack = null
+            }
+        }.apply { start() }
+    }
+
+    fun syncVolumes() {
+        val streamVol = if (isNoiseOn) noiseLevel else 1.0f
+        mediaPlayer?.setVolume(streamVol, streamVol)
+    }
+
     fun getCurrentItems(): List<String> {
         if (isPickingFolder) {
             val items = scanFolder(currentPickPath, foldersOnly = true).toMutableList()
@@ -425,8 +522,17 @@ class IpodState {
             "Mixer" -> {
                 when {
                     item.startsWith("Mix:") -> isAdjustingMix = true
-                    item.startsWith("Noise:") -> isNoiseOn = !isNoiseOn
-                    item.startsWith("Type:") -> noiseType = if (noiseType == "White") "Blue" else "White"
+                    item.startsWith("Noise:") -> {
+                        isNoiseOn = !isNoiseOn
+                        syncVolumes()
+                    }
+                    item.startsWith("Type:") -> {
+                        noiseType = when (noiseType) {
+                            "White" -> "Pink"
+                            "Pink" -> "Blue"
+                            else -> "White"
+                        }
+                    }
                 }
             }
             "Music", "Audiobooks" -> {
@@ -457,6 +563,7 @@ class IpodState {
             mediaPlayer?.release()
             mediaPlayer = MediaPlayer().apply {
                 setDataSource(source)
+                syncVolumes()
                 prepareAsync()
                 setOnPreparedListener { 
                     start()
@@ -493,6 +600,8 @@ class IpodState {
     }
 
     fun releasePlayer() {
+        isNoiseThreadRunning = false
+        try { noiseThread?.join(500) } catch (e: Exception) {}
         mediaPlayer?.release()
         mediaPlayer = null
     }
@@ -523,6 +632,7 @@ class IpodState {
     fun handleMove(delta: Int) {
         if (isAdjustingMix) {
             noiseLevel = (noiseLevel + delta * 0.02f).coerceIn(0f, 1f)
+            syncVolumes()
         } else {
             val items = getCurrentItems()
             if (items.isNotEmpty()) {
