@@ -402,9 +402,9 @@ class IpodState {
         }.apply { start() }
     }
 
-    fun syncVolumes() {
+    fun syncVolumes(player: MediaPlayer? = mediaPlayer) {
         val streamVol = if (isNoiseOn) noiseLevel else 1.0f
-        mediaPlayer?.setVolume(streamVol, streamVol)
+        player?.setVolume(streamVol, streamVol)
     }
 
     fun getCurrentItems(): List<String> {
@@ -559,50 +559,79 @@ class IpodState {
 
     private fun playSource(source: String, name: String, album: String) {
         try {
-            mediaPlayer?.stop()
-            mediaPlayer?.release()
-            mediaPlayer = MediaPlayer().apply {
+            // Safety: isNowPlaying set to true early so UI switches to NowPlayingView immediately
+            isNowPlaying = true
+            currentTrack = Track(name, "iPod Player", album)
+            playbackProgress = 0f
+
+            val oldPlayer = mediaPlayer
+            mediaPlayer = null
+            oldPlayer?.let {
+                try {
+                    it.stop()
+                } catch (e: Exception) {}
+                it.release()
+            }
+
+            val newPlayer = MediaPlayer()
+            mediaPlayer = newPlayer
+            
+            newPlayer.apply {
                 setDataSource(source)
-                syncVolumes()
+                syncVolumes(this)
                 prepareAsync()
                 setOnPreparedListener { 
                     start()
-                    isNowPlaying = true
                 }
                 setOnCompletionListener { isNowPlaying = false }
-                setOnErrorListener { _, _, _ -> isNowPlaying = false; true }
+                setOnErrorListener { _, what, extra -> 
+                    Log.e("IPOD", "MediaPlayer Error: $what, $extra")
+                    isNowPlaying = false
+                    true 
+                }
             }
-            currentTrack = Track(name, "iPod Player", album)
         } catch (e: Exception) {
             Log.e("IPOD", "Playback failed", e)
+            isNowPlaying = false
         }
     }
 
     fun togglePlay() {
-        mediaPlayer?.let {
-            if (it.isPlaying) it.pause() else it.start()
+        try {
+            mediaPlayer?.let {
+                if (it.isPlaying) it.pause() else it.start()
+            }
+        } catch (e: Exception) {
+            Log.e("IPOD", "Toggle play failed", e)
         }
     }
 
     fun seek(seconds: Int) {
-        mediaPlayer?.let {
-            val newPos = it.currentPosition + (seconds * 1000)
-            it.seekTo(newPos.coerceIn(0, it.duration))
-        }
+        try {
+            mediaPlayer?.let {
+                val newPos = it.currentPosition + (seconds * 1000)
+                it.seekTo(newPos.coerceIn(0, it.duration))
+            }
+        } catch (e: Exception) {}
     }
 
     fun updateProgress() {
         mediaPlayer?.let {
-            if (it.isPlaying && it.duration > 0) {
-                playbackProgress = it.currentPosition.toFloat() / it.duration.toFloat()
-            }
+            try {
+                if (it.isPlaying && it.duration > 0) {
+                    playbackProgress = it.currentPosition.toFloat() / it.duration.toFloat()
+                }
+            } catch (e: Exception) {}
         }
     }
 
     fun releasePlayer() {
         isNoiseThreadRunning = false
         try { noiseThread?.join(500) } catch (e: Exception) {}
-        mediaPlayer?.release()
+        mediaPlayer?.let {
+            try { it.stop() } catch (e: Exception) {}
+            it.release()
+        }
         mediaPlayer = null
     }
 
