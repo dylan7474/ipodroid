@@ -636,7 +636,7 @@ class IpodState {
         } else {
             val items = getCurrentItems()
             if (items.isNotEmpty()) {
-                selectedIndex = (selectedIndex + delta + items.size) % items.size
+                selectedIndex = (selectedIndex + delta).coerceIn(0, items.size - 1)
             }
         }
     }
