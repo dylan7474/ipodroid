@@ -164,16 +164,23 @@ class MainActivity : ComponentActivity() {
                     val ip = getIpAddress() ?: "localhost"
                     val stationsRows = ipodState.config.radioStations.mapIndexed { index, station ->
                         """
-                        <tr>
-                            <td><b>${station.name}</b></td>
-                            <td><code style="font-size: 0.85em; color: #636e72;">${station.url}</code></td>
-                            <td style="text-align: right;">
+                        <div class="station-card" data-id="$index">
+                            <div class="drag-handle">
+                                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="5" r="1"/><circle cx="9" cy="12" r="1"/><circle cx="9" cy="19" r="1"/><circle cx="15" cy="5" r="1"/><circle cx="15" cy="12" r="1"/><circle cx="15" cy="19" r="1"/></svg>
+                            </div>
+                            <div class="station-info">
+                                <div class="station-name">${station.name}</div>
+                                <div class="station-url">${station.url}</div>
+                            </div>
+                            <div class="station-actions">
                                 <form action="/remove-station" method="POST" style="display:inline;">
                                     <input type="hidden" name="index" value="$index">
-                                    <button type="submit" class="btn-remove">Remove</button>
+                                    <button type="submit" class="btn-remove">
+                                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/></svg>
+                                    </button>
                                 </form>
-                            </td>
-                        </tr>
+                            </div>
+                        </div>
                         """.trimIndent()
                     }.joinToString("")
 
@@ -184,74 +191,198 @@ class MainActivity : ComponentActivity() {
                         <head>
                             <meta charset="UTF-8">
                             <meta name="viewport" content="width=device-width, initial-scale=1.0">
-                            <title>iPod Radio Manager</title>
+                            <title>iPod Connect</title>
+                            <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;600;800&display=swap" rel="stylesheet">
+                            <script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.0/Sortable.min.js"></script>
                             <style>
-                                :root { --primary: #2d3436; --accent: #0984e3; --danger: #d63031; --bg: #f5f6fa; --card: #ffffff; }
-                                body { font-family: 'Segoe UI', system-ui, -apple-system, sans-serif; background-color: var(--bg); margin: 0; padding: 20px; color: var(--primary); }
-                                .container { max-width: 900px; margin: 0 auto; }
-                                .card { background: var(--card); border-radius: 12px; box-shadow: 0 10px 30px rgba(0,0,0,0.05); padding: 40px; margin-bottom: 20px; }
-                                header { display: flex; justify-content: space-between; align-items: center; border-bottom: 2px solid var(--bg); padding-bottom: 20px; margin-bottom: 30px; }
-                                h1 { margin: 0; font-size: 24px; display: flex; align-items: center; gap: 12px; }
-                                .ip-badge { background: var(--bg); padding: 8px 16px; border-radius: 20px; font-size: 13px; font-weight: bold; color: #636e72; border: 1px solid #dfe6e9; }
-                                table { width: 100%; border-collapse: collapse; margin-top: 10px; }
-                                th { text-align: left; padding: 12px; border-bottom: 2px solid var(--bg); color: #b2bec3; text-transform: uppercase; font-size: 11px; letter-spacing: 1px; }
-                                td { padding: 16px 12px; border-bottom: 1px solid var(--bg); }
-                                .btn-remove { background: #fff; color: var(--danger); border: 1px solid #ff7675; padding: 6px 14px; border-radius: 6px; cursor: pointer; font-size: 12px; font-weight: 600; transition: all 0.2s; }
+                                :root {
+                                    --bg: #05070a;
+                                    --surface: #0f121a;
+                                    --surface-bright: #1a1f2e;
+                                    --accent: #3b82f6;
+                                    --accent-glow: rgba(59, 130, 246, 0.2);
+                                    --text: #ffffff;
+                                    --text-dim: #94a3b8;
+                                    --danger: #ef4444;
+                                    --border: #262f45;
+                                }
+                                * { box-sizing: border-box; }
+                                body {
+                                    font-family: 'Plus Jakarta Sans', sans-serif;
+                                    background-color: var(--bg);
+                                    color: var(--text);
+                                    margin: 0;
+                                    padding: 40px 20px;
+                                    line-height: 1.5;
+                                }
+                                .container { max-width: 700px; margin: 0 auto; }
+                                header { margin-bottom: 40px; text-align: center; }
+                                h1 {
+                                    font-size: 2.5rem;
+                                    font-weight: 800;
+                                    margin: 0 0 8px 0;
+                                    letter-spacing: -0.02em;
+                                    background: linear-gradient(135deg, #fff 0%, #94a3b8 100%);
+                                    -webkit-background-clip: text;
+                                    -webkit-text-fill-color: transparent;
+                                }
+                                .status-bar {
+                                    display: inline-flex;
+                                    align-items: center;
+                                    gap: 12px;
+                                    background: var(--surface);
+                                    padding: 6px 16px;
+                                    border-radius: 99px;
+                                    border: 1px solid var(--border);
+                                    font-size: 0.85rem;
+                                    color: var(--text-dim);
+                                }
+                                .status-dot {
+                                    width: 8px;
+                                    height: 8px;
+                                    background: #22c55e;
+                                    border-radius: 50%;
+                                    box-shadow: 0 0 10px #22c55e;
+                                }
+                                .card {
+                                    background: var(--surface);
+                                    border-radius: 24px;
+                                    border: 1px solid var(--border);
+                                    padding: 24px;
+                                    box-shadow: 0 20px 40px rgba(0,0,0,0.4);
+                                }
+                                .section-title {
+                                    font-size: 1.1rem;
+                                    font-weight: 700;
+                                    margin: 0 0 20px 0;
+                                    color: var(--text-dim);
+                                    display: flex;
+                                    align-items: center;
+                                    gap: 8px;
+                                }
+                                .station-list { margin-bottom: 32px; }
+                                .station-card {
+                                    display: flex;
+                                    align-items: center;
+                                    background: var(--surface-bright);
+                                    border: 1px solid var(--border);
+                                    border-radius: 16px;
+                                    margin-bottom: 12px;
+                                    padding: 12px;
+                                    transition: transform 0.2s, box-shadow 0.2s;
+                                }
+                                .station-card:hover {
+                                    border-color: var(--accent);
+                                    box-shadow: 0 0 15px var(--accent-glow);
+                                }
+                                .drag-handle { cursor: grab; padding: 8px; color: var(--text-dim); display: flex; align-items: center; }
+                                .drag-handle:active { cursor: grabbing; }
+                                .station-info { flex: 1; margin: 0 16px; min-width: 0; }
+                                .station-name { font-weight: 700; font-size: 1rem; margin-bottom: 2px; }
+                                .station-url { font-size: 0.8rem; color: var(--text-dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+                                .btn-remove {
+                                    background: rgba(239, 68, 68, 0.1);
+                                    border: 1px solid rgba(239, 68, 68, 0.2);
+                                    color: var(--danger);
+                                    width: 40px;
+                                    height: 40px;
+                                    border-radius: 12px;
+                                    display: flex;
+                                    align-items: center;
+                                    justify-content: center;
+                                    cursor: pointer;
+                                    transition: 0.2s;
+                                }
                                 .btn-remove:hover { background: var(--danger); color: white; }
-                                .add-section { margin-top: 50px; padding: 30px; background: #f8f9fa; border-radius: 10px; border: 1px solid #eee; }
-                                .form-row { display: grid; grid-template-columns: 1fr 2fr auto; gap: 20px; align-items: end; }
-                                .input-group { display: flex; flex-direction: column; gap: 8px; }
-                                label { font-size: 12px; font-weight: 800; color: #636e72; text-transform: uppercase; }
-                                input { padding: 12px; border: 1px solid #dfe6e9; border-radius: 8px; font-size: 14px; transition: border 0.2s; }
-                                input:focus { outline: none; border-color: var(--accent); background: white; }
-                                .btn-add { background: var(--accent); color: white; border: none; padding: 0 30px; border-radius: 8px; cursor: pointer; font-weight: bold; height: 44px; transition: 0.2s; }
-                                .btn-add:hover { background: #074b83; transform: translateY(-1px); }
-                                .footer { text-align: center; color: #b2bec3; font-size: 13px; margin-top: 50px; }
-                                .hint { font-size: 13px; color: #636e72; margin-top: 10px; line-height: 1.5; }
+                                .add-form { background: var(--surface-bright); border-radius: 20px; padding: 24px; border: 1px solid var(--border); }
+                                .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 16px; }
+                                .input-group label { display: block; font-size: 0.75rem; font-weight: 800; text-transform: uppercase; color: var(--text-dim); margin-bottom: 8px; }
+                                input {
+                                    width: 100%;
+                                    background: var(--bg);
+                                    border: 1px solid var(--border);
+                                    border-radius: 12px;
+                                    padding: 12px 16px;
+                                    color: white;
+                                    font-family: inherit;
+                                    font-size: 0.95rem;
+                                    outline: none;
+                                    transition: border-color 0.2s;
+                                }
+                                input:focus { border-color: var(--accent); }
+                                .btn-add {
+                                    width: 100%;
+                                    background: var(--accent);
+                                    color: white;
+                                    border: none;
+                                    border-radius: 12px;
+                                    padding: 14px;
+                                    font-weight: 700;
+                                    font-size: 1rem;
+                                    cursor: pointer;
+                                    transition: 0.2s;
+                                }
+                                .btn-add:hover { filter: brightness(1.1); transform: translateY(-1px); box-shadow: 0 4px 12px rgba(59, 130, 246, 0.4); }
+                                .sortable-ghost { opacity: 0.3; background: var(--accent); }
+                                @media (max-width: 600px) { .form-grid { grid-template-columns: 1fr; } }
                             </style>
                         </head>
                         <body>
                             <div class="container">
+                                <header>
+                                    <h1>iPod Connect</h1>
+                                    <div class="status-bar">
+                                        <div class="status-dot"></div>
+                                        Active at $ip:8080
+                                    </div>
+                                </header>
+
                                 <div class="card">
-                                    <header>
-                                        <h1>📻 iPod Radio Station Manager</h1>
-                                        <div class="ip-badge">Device IP: $ip</div>
-                                    </header>
-
-                                    <table>
-                                        <thead>
-                                            <tr>
-                                                <th>Station Name</th>
-                                                <th>Stream URL</th>
-                                                <th style="text-align: right;">Action</th>
-                                            </tr>
-                                        </thead>
-                                        <tbody>
-                                            $stationsRows
-                                            ${if (ipodState.config.radioStations.isEmpty()) "<tr><td colspan='3' style='text-align:center; padding: 60px; color: #b2bec3;'>No stations configured. Use the form below to add your first stream.</td></tr>" else ""}
-                                        </tbody>
-                                    </table>
-
-                                    <div class="add-section">
-                                        <h2 style="font-size: 16px; margin-bottom: 20px; text-transform: uppercase; color: #2d3436;">Add New Stream</h2>
-                                        <form action="/add-station" method="POST" class="form-row">
-                                            <div class="input-group">
-                                                <label>Display Name</label>
-                                                <input type="text" name="name" placeholder="BBC Radio 1" required>
+                                    <div class="section-title">
+                                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4.9 19.1C1 15.2 1 8.8 4.9 4.9"/><path d="M7.8 16.2c-2.3-2.3-2.3-6.1 0-8.4"/><circle cx="12" cy="12" r="2"/><path d="M16.2 7.8c2.3 2.3 2.3 6.1 0 8.4"/><path d="M19.1 4.9C23 8.8 23 15.2 19.1 19.1"/></svg>
+                                        Radio Stations
+                                    </div>
+                                    <div id="stationList" class="station-list">
+                                        $stationsRows
+                                        ${if (ipodState.config.radioStations.isEmpty()) "<p style='text-align:center; color:var(--text-dim); padding: 40px;'>No stations configured.</p>" else ""}
+                                    </div>
+                                    <div class="section-title">
+                                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+                                        Add New Station
+                                    </div>
+                                    <div class="add-form">
+                                        <form action="/add-station" method="POST">
+                                            <div class="form-grid">
+                                                <div class="input-group">
+                                                    <label>Display Name</label>
+                                                    <input type="text" name="name" placeholder="e.g. Chillhop" required>
+                                                </div>
+                                                <div class="input-group">
+                                                    <label>Stream URL</label>
+                                                    <input type="text" name="url" placeholder="https://..." required>
+                                                </div>
                                             </div>
-                                            <div class="input-group">
-                                                <label>Stream URL (Direct MP3/AAC Link)</label>
-                                                <input type="text" name="url" placeholder="https://..." required>
-                                            </div>
-                                            <button type="submit" class="btn-add">Add Station</button>
+                                            <button type="submit" class="btn-add">Add to Library</button>
                                         </form>
-                                        <p class="hint"><b>Tip:</b> Make sure the URL points to a direct audio stream. Web player URLs will not work.</p>
                                     </div>
                                 </div>
-                                <div class="footer">
-                                    iPod Classic Management Terminal &bull; Local Access Only
-                                </div>
                             </div>
+                            <script>
+                                var el = document.getElementById('stationList');
+                                Sortable.create(el, {
+                                    handle: '.drag-handle',
+                                    animation: 200,
+                                    ghostClass: 'sortable-ghost',
+                                    onEnd: function () {
+                                        var order = Array.from(el.querySelectorAll('.station-card')).map(it => parseInt(it.dataset.id));
+                                        fetch('/reorder', {
+                                            method: 'POST',
+                                            headers: { 'Content-Type': 'application/json' },
+                                            body: JSON.stringify({ order: order })
+                                        });
+                                    }
+                                });
+                            </script>
                         </body>
                         </html>
                         """.trimIndent(),
@@ -276,6 +407,20 @@ class MainActivity : ComponentActivity() {
                         saveConfig()
                     }
                     call.respondRedirect("/")
+                }
+                post("/reorder") {
+                    data class ReorderRequest(val order: List<Int>)
+                    try {
+                        val request = call.receive<ReorderRequest>()
+                        val current = ipodState.config.radioStations.toList()
+                        val reordered = request.order.mapNotNull { current.getOrNull(it) }
+                        if (reordered.size == current.size) {
+                            ipodState.config.radioStations.clear()
+                            ipodState.config.radioStations.addAll(reordered)
+                            saveConfig()
+                            call.respond(HttpStatusCode.OK)
+                        } else { call.respond(HttpStatusCode.BadRequest) }
+                    } catch (e: Exception) { call.respond(HttpStatusCode.InternalServerError) }
                 }
             }
         }.start(wait = false)
@@ -351,9 +496,7 @@ class IpodState(val onSaveConfig: () -> Unit) {
         startNoiseGenerator()
     }
 
-    fun notifyInteraction() {
-        lastInteractionTime = System.currentTimeMillis()
-    }
+    fun notifyInteraction() { lastInteractionTime = System.currentTimeMillis() }
 
     fun isActuallyPlaying(): Boolean {
         return try { mediaPlayer?.isPlaying == true } catch (e: Exception) { false }
@@ -364,76 +507,45 @@ class IpodState(val onSaveConfig: () -> Unit) {
         isNoiseThreadRunning = true
         noiseThread = Thread {
             val sampleRate = 44100
-            val minBufSize = AudioTrack.getMinBufferSize(
-                sampleRate,
-                AudioFormat.CHANNEL_OUT_MONO,
-                AudioFormat.ENCODING_PCM_16BIT
-            )
-            
+            val minBufSize = AudioTrack.getMinBufferSize(sampleRate, AudioFormat.CHANNEL_OUT_MONO, AudioFormat.ENCODING_PCM_16BIT)
             try {
                 noiseTrack = AudioTrack.Builder()
-                    .setAudioAttributes(AudioAttributes.Builder()
-                        .setUsage(AudioAttributes.USAGE_MEDIA)
-                        .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
-                        .build())
-                    .setAudioFormat(AudioFormat.Builder()
-                        .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
-                        .setSampleRate(sampleRate)
-                        .setChannelMask(AudioFormat.CHANNEL_OUT_MONO)
-                        .build())
-                    .setBufferSizeInBytes(minBufSize)
-                    .build()
-
+                    .setAudioAttributes(AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_MEDIA).setContentType(AudioAttributes.CONTENT_TYPE_MUSIC).build())
+                    .setAudioFormat(AudioFormat.Builder().setEncoding(AudioFormat.ENCODING_PCM_16BIT).setSampleRate(sampleRate).setChannelMask(AudioFormat.CHANNEL_OUT_MONO).build())
+                    .setBufferSizeInBytes(minBufSize).build()
                 val buffer = ShortArray(minBufSize)
                 val random = java.util.Random()
                 val pinkRows = 12
                 val pinkValues = DoubleArray(pinkRows)
                 var pinkRunningSum = 0.0
                 var lastWhite = 0.0
-                
                 noiseTrack?.play()
-                
                 while (isNoiseThreadRunning) {
-                    val type = noiseType
                     val vol = if (isNoiseOn) 1f - noiseLevel else 0f
                     noiseTrack?.setVolume(vol)
-                    
                     for (i in buffer.indices) {
                         val white = random.nextDouble() * 2.0 - 1.0
-                        val sample = when (type) {
+                        val sample = when (noiseType) {
                             "White" -> white
                             "Pink" -> {
-                                var mask = 1
-                                val r = random.nextInt()
+                                var mask = 1; val r = random.nextInt()
                                 for (j in 0 until pinkRows) {
                                     if ((r and mask) != 0) {
-                                        pinkRunningSum -= pinkValues[j]
-                                        pinkValues[j] = random.nextDouble() * 2.0 - 1.0
-                                        pinkRunningSum += pinkValues[j]
+                                        pinkRunningSum -= pinkValues[j]; pinkValues[j] = random.nextDouble() * 2.0 - 1.0; pinkRunningSum += pinkValues[j]
                                     }
                                     mask = mask shl 1
                                 }
                                 (pinkRunningSum + white) / (pinkRows + 1)
                             }
-                            "Blue" -> {
-                                val blue = white - lastWhite
-                                lastWhite = white
-                                blue * 0.5
-                            }
+                            "Blue" -> { val b = white - lastWhite; lastWhite = white; b * 0.5 }
                             else -> white
                         }
-                        // Scale to avoid clipping and harshness
                         buffer[i] = (sample * 0.4 * Short.MAX_VALUE).toInt().toShort()
                     }
                     noiseTrack?.write(buffer, 0, buffer.size)
                 }
-            } catch (e: Exception) {
-                Log.e("IPOD", "Noise generation failed", e)
-            } finally {
-                try {
-                    noiseTrack?.stop()
-                    noiseTrack?.release()
-                } catch (e: Exception) {}
+            } catch (e: Exception) { Log.e("IPOD", "Noise failed", e) } finally {
+                try { noiseTrack?.stop(); noiseTrack?.release() } catch (e: Exception) {}
                 noiseTrack = null
             }
         }.apply { start() }
@@ -450,469 +562,188 @@ class IpodState(val onSaveConfig: () -> Unit) {
             items.add(0, "[ SELECT CURRENT FOLDER ]")
             return items
         }
-
-        val currentView = menuStack.last()
-        return when (currentView) {
+        return when (val currentView = menuStack.last()) {
             "main" -> listOf("Music", "Audiobooks", "Radio", "Mixer", "Settings")
             "Radio" -> config.radioStations.map { it.name }
-            "Mixer" -> listOf(
-                "Noise: ${if (isNoiseOn) "On" else "Off"}",
-                "Type: $noiseType",
-                "Mix: ${(noiseLevel * 100).toInt()}% Stream"
-            )
-            "Settings" -> listOf(
-                "Set Music Folder",
-                "Set Audiobooks Folder",
-                "Connect: ${ipAddress ?: "No IP"}:8080",
-                "About",
-                "Sleep Timer"
-            )
+            "Mixer" -> listOf("Noise: ${if (isNoiseOn) "On" else "Off"}", "Type: $noiseType", "Mix: ${(noiseLevel * 100).toInt()}% Stream")
+            "Settings" -> listOf("Set Music Folder", "Set Audiobooks Folder", "Connect: ${ipAddress ?: "No IP"}:8080", "About", "Sleep Timer")
             "Sleep Timer" -> listOf("Off", "15 Minutes", "30 Minutes", "60 Minutes", "90 Minutes")
             "Music" -> scanFolder(config.musicPath)
             "Audiobooks" -> scanFolder(config.audiobooksPath)
-            else -> scanFolder(currentView) // Subfolder navigation
+            else -> scanFolder(currentView)
         }
     }
 
     private fun scanFolder(path: String, foldersOnly: Boolean = false): List<String> {
         val root = Environment.getExternalStorageDirectory()
         val dir = if (path.isEmpty()) root else File(root, path)
-        
-        Log.d("IPOD", "Scanning: ${dir.absolutePath} (foldersOnly=$foldersOnly)")
-        
-        if (!dir.exists() || !dir.isDirectory) {
-            Log.e("IPOD", "Not a directory: ${dir.absolutePath}")
-            return listOf("Empty / Not Found")
-        }
-        
-        val allFiles = dir.listFiles()
-        if (allFiles == null) {
-            Log.e("IPOD", "listFiles() is null. Permission issue?")
-            return listOf("Access Denied")
-        }
-
-        val filtered = allFiles.filter { file ->
-            if (foldersOnly) {
-                file.isDirectory
-            } else {
-                file.isDirectory || audioExtensions.any { ext -> file.name.lowercase().endsWith(".$ext") }
-            }
-        }
-        
-        Log.d("IPOD", "Found ${filtered.size} items")
-
-        return filtered
-            .map { it.name }
-            .sortedWith(compareBy({ !File(dir, it).isDirectory }, { it.lowercase() }))
+        if (!dir.exists() || !dir.isDirectory) return listOf("Empty / Not Found")
+        val allFiles = dir.listFiles() ?: return listOf("Access Denied")
+        return allFiles.filter { file ->
+            if (foldersOnly) file.isDirectory
+            else file.isDirectory || audioExtensions.any { ext -> file.name.lowercase().endsWith(".$ext") }
+        }.map { it.name }.sortedWith(compareBy({ !File(dir, it).isDirectory }, { it.lowercase() }))
     }
 
     fun handleSelect(onSave: () -> Unit) {
         notifyInteraction()
-        if (isPickingFolder) {
-            val items = getCurrentItems()
-            val item = items[selectedIndex]
-            if (item == "[ SELECT CURRENT FOLDER ]") {
-                if (pickingTarget == "Music") config.musicPath = currentPickPath
-                else config.audiobooksPath = currentPickPath
-                isPickingFolder = false
-                onSave()
-                selectedIndex = 0
-            } else {
-                currentPickPath = if (currentPickPath.isEmpty()) item else "$currentPickPath/$item"
-                selectedIndex = 0
-            }
-            return
-        }
-
-        if (isAdjustingMix) {
-            isAdjustingMix = false
-            return
-        }
         val items = getCurrentItems()
         if (items.isEmpty() || items[0] == "Empty / Not Found" || items[0] == "Access Denied") return
         val item = items[selectedIndex]
-        val currentView = menuStack.last()
-        
-        when (currentView) {
-            "main" -> {
-                menuStack.add(item)
-                selectedIndex = 0
-            }
-            "Settings" -> {
-                when (item) {
-                    "Set Music Folder" -> {
-                        isPickingFolder = true
-                        pickingTarget = "Music"
-                        currentPickPath = ""
-                        selectedIndex = 0
-                    }
-                    "Set Audiobooks Folder" -> {
-                        isPickingFolder = true
-                        pickingTarget = "Audiobooks"
-                        currentPickPath = ""
-                        selectedIndex = 0
-                    }
-                    "Sleep Timer" -> {
-                        menuStack.add("Sleep Timer")
-                        selectedIndex = 0
-                    }
-                }
+        if (isPickingFolder) {
+            if (item == "[ SELECT CURRENT FOLDER ]") {
+                if (pickingTarget == "Music") config.musicPath = currentPickPath else config.audiobooksPath = currentPickPath
+                isPickingFolder = false; onSave(); selectedIndex = 0
+            } else { currentPickPath = if (currentPickPath.isEmpty()) item else "$currentPickPath/$item"; selectedIndex = 0 }
+            return
+        }
+        if (isAdjustingMix) { isAdjustingMix = false; return }
+        when (val currentView = menuStack.last()) {
+            "main" -> { menuStack.add(item); selectedIndex = 0 }
+            "Settings" -> when (item) {
+                "Set Music Folder" -> { isPickingFolder = true; pickingTarget = "Music"; currentPickPath = ""; selectedIndex = 0 }
+                "Set Audiobooks Folder" -> { isPickingFolder = true; pickingTarget = "Audiobooks"; currentPickPath = ""; selectedIndex = 0 }
+                "Sleep Timer" -> { menuStack.add("Sleep Timer"); selectedIndex = 0 }
             }
             "Sleep Timer" -> {
-                val mins = when (item) {
-                    "15 Minutes" -> 15
-                    "30 Minutes" -> 30
-                    "60 Minutes" -> 60
-                    "90 Minutes" -> 90
-                    else -> 0
-                }
-                setSleepTimer(mins)
-                menuStack.removeAt(menuStack.size - 1)
-                selectedIndex = 0
+                val mins = when (item) { "15 Minutes" -> 15; "30 Minutes" -> 30; "60 Minutes" -> 60; "90 Minutes" -> 90; else -> 0 }
+                setSleepTimer(mins); menuStack.removeAt(menuStack.size - 1); selectedIndex = 0
             }
-            "Radio" -> {
-                val station = config.radioStations[selectedIndex]
-                playSource(station.url, station.name, "Radio Stream")
-            }
-            "Mixer" -> {
-                when {
-                    item.startsWith("Mix:") -> isAdjustingMix = true
-                    item.startsWith("Noise:") -> {
-                        isNoiseOn = !isNoiseOn
-                        syncVolumes()
-                    }
-                    item.startsWith("Type:") -> {
-                        noiseType = when (noiseType) {
-                            "White" -> "Pink"
-                            "Pink" -> "Blue"
-                            else -> "White"
-                        }
-                    }
-                }
-            }
-            "Music", "Audiobooks" -> {
-                val basePath = if (currentView == "Music") config.musicPath else config.audiobooksPath
-                val file = File(File(Environment.getExternalStorageDirectory(), basePath), item)
-                if (file.isDirectory) {
-                    menuStack.add("$basePath/$item")
-                    selectedIndex = 0
-                } else {
-                    playSource(file.absolutePath, item, currentView)
-                }
+            "Radio" -> playSource(config.radioStations[selectedIndex].url, config.radioStations[selectedIndex].name, "Radio Stream")
+            "Mixer" -> when {
+                item.startsWith("Mix:") -> isAdjustingMix = true
+                item.startsWith("Noise:") -> { isNoiseOn = !isNoiseOn; syncVolumes() }
+                item.startsWith("Type:") -> noiseType = when (noiseType) { "White" -> "Blue"; "Blue" -> "Pink"; else -> "White" }
             }
             else -> {
-                val file = File(File(Environment.getExternalStorageDirectory(), currentView), item)
-                if (file.isDirectory) {
-                    menuStack.add("${currentView}/$item")
-                    selectedIndex = 0
-                } else {
-                    playSource(file.absolutePath, item, currentView)
-                }
+                val basePath = if (currentView == "Music") config.musicPath else if (currentView == "Audiobooks") config.audiobooksPath else currentView
+                val file = File(File(Environment.getExternalStorageDirectory(), basePath), item)
+                if (file.isDirectory) { menuStack.add("$basePath/$item"); selectedIndex = 0 }
+                else { playSource(file.absolutePath, item, if (currentView == "Music" || currentView == "Audiobooks") currentView else "Music") }
             }
         }
     }
 
     private fun setSleepTimer(minutes: Int) {
-        sleepTimerThread?.interrupt()
-        sleepMinutesRemaining = minutes
+        sleepTimerThread?.interrupt(); sleepMinutesRemaining = minutes
         if (minutes > 0) {
             sleepTimerThread = Thread {
                 try {
-                    while (sleepMinutesRemaining > 0) {
-                        Thread.sleep(60000)
-                        sleepMinutesRemaining--
-                    }
-                    // Stop audio stream only
-                    mediaPlayer?.let {
-                        try {
-                            if (it.isPlaying) it.stop()
-                            it.release()
-                        } catch (e: Exception) {}
-                    }
-                    mediaPlayer = null
-                    isNowPlaying = false
-                    // isNoiseOn = false // Keep noise generator running
+                    while (sleepMinutesRemaining > 0) { Thread.sleep(60000); sleepMinutesRemaining-- }
+                    mediaPlayer?.let { try { if (it.isPlaying) it.stop(); it.release() } catch (e: Exception) {} }
+                    mediaPlayer = null; isNowPlaying = false
                 } catch (e: InterruptedException) {}
-            }.apply { 
-                name = "SleepTimerThread"
-                start() 
-            }
+            }.apply { name = "SleepTimerThread"; start() }
         }
     }
 
     private fun playSource(source: String, name: String, album: String) {
         try {
-            // Safety: isNowPlaying set to true early so UI switches to NowPlayingView immediately
-            isNowPlaying = true
-            notifyInteraction()
+            isNowPlaying = true; notifyInteraction()
             currentTrack = Track(name, "iPod Player", album, source)
-            playbackProgress = 0f
-            currentPositionText = "0:00"
-            durationText = "0:00"
-
-            val oldPlayer = mediaPlayer
-            mediaPlayer = null
-            oldPlayer?.let {
-                Thread {
-                    try {
-                        it.setOnPreparedListener(null)
-                        it.setOnCompletionListener(null)
-                        it.setOnErrorListener(null)
-                        it.release()
-                    } catch (e: Exception) {}
-                }.start()
-            }
-
+            playbackProgress = 0f; currentPositionText = "0:00"; durationText = "0:00"
+            val oldPlayer = mediaPlayer; mediaPlayer = null
+            oldPlayer?.let { Thread { try { it.setOnPreparedListener(null); it.setOnCompletionListener(null); it.setOnErrorListener(null); it.release() } catch (e: Exception) {} }.start() }
             val newPlayer = MediaPlayer()
             newPlayer.apply {
-                setDataSource(source)
-                syncVolumes(this)
-                prepareAsync()
+                setDataSource(source); syncVolumes(this); prepareAsync()
                 setOnPreparedListener { 
-                    if (album.contains("Audiobooks")) {
-                        val savedPos = config.audiobookPositions[source] ?: 0
-                        it.seekTo(savedPos)
-                    }
-                    start()
+                    if (album.contains("Audiobooks")) { val savedPos = config.audiobookPositions[source] ?: 0; it.seekTo(savedPos) }
+                    it.start() 
                 }
                 setOnCompletionListener { p ->
-                    if (album.contains("Audiobooks")) {
-                        config.audiobookPositions.remove(source)
-                        onSaveConfig()
-                    }
-                    if (mediaPlayer == p) {
-                        playNextTrack()
-                    }
+                    if (album.contains("Audiobooks")) { config.audiobookPositions.remove(source); onSaveConfig() }
+                    if (mediaPlayer == p) playNextTrack()
                     p.release()
                 }
-                setOnErrorListener { p, what, extra -> 
-                    Log.e("IPOD", "MediaPlayer Error: $what, $extra")
-                    if (mediaPlayer == p) isNowPlaying = false
-                    p.release()
-                    true 
-                }
+                setOnErrorListener { p, what, extra -> if (mediaPlayer == p) isNowPlaying = false; p.release(); true }
                 mediaPlayer = this
             }
-        } catch (e: Exception) {
-            Log.e("IPOD", "Playback failed", e)
-            isNowPlaying = false
-        }
+        } catch (e: Exception) { Log.e("IPOD", "Playback failed", e); isNowPlaying = false }
     }
 
     fun playNextTrack() {
         val track = currentTrack ?: return
         if (track.album == "Radio Stream") return
-
         val folderItems = scanFolder(track.album)
-        val root = Environment.getExternalStorageDirectory()
-        val dir = if (track.album.isEmpty()) root else File(root, track.album)
-        
-        val tracks = folderItems.filter { name ->
-            val file = File(dir, name)
-            !file.isDirectory && audioExtensions.any { ext -> name.lowercase().endsWith(".$ext") }
-        }
-
+        val dir = File(Environment.getExternalStorageDirectory(), track.album)
+        val tracks = folderItems.filter { !File(dir, it).isDirectory && audioExtensions.any { ext -> it.lowercase().endsWith(".$ext") } }
         val currentIndex = tracks.indexOf(track.name)
-        if (currentIndex != -1 && currentIndex < tracks.size - 1) {
-            val nextTrackName = tracks[currentIndex + 1]
-            val nextTrackFile = File(dir, nextTrackName)
-            playSource(nextTrackFile.absolutePath, nextTrackName, track.album)
-        } else {
-            isNowPlaying = false
-        }
+        if (currentIndex != -1 && currentIndex < tracks.size - 1) playSource(File(dir, tracks[currentIndex + 1]).absolutePath, tracks[currentIndex + 1], track.album)
+        else isNowPlaying = false
     }
 
     fun playPreviousTrack() {
         val track = currentTrack ?: return
         if (track.album == "Radio Stream") return
-
-        mediaPlayer?.let {
-            if (it.currentPosition > 3000) {
-                it.seekTo(0)
-                return
-            }
-        }
-
+        mediaPlayer?.let { if (it.currentPosition > 3000) { it.seekTo(0); return } }
         val folderItems = scanFolder(track.album)
-        val root = Environment.getExternalStorageDirectory()
-        val dir = if (track.album.isEmpty()) root else File(root, track.album)
-        
-        val tracks = folderItems.filter { name ->
-            val file = File(dir, name)
-            !file.isDirectory && audioExtensions.any { ext -> name.lowercase().endsWith(".$ext") }
-        }
-
+        val dir = File(Environment.getExternalStorageDirectory(), track.album)
+        val tracks = folderItems.filter { !File(dir, it).isDirectory && audioExtensions.any { ext -> it.lowercase().endsWith(".$ext") } }
         val currentIndex = tracks.indexOf(track.name)
-        if (currentIndex > 0) {
-            val prevTrackName = tracks[currentIndex - 1]
-            val prevTrackFile = File(dir, prevTrackName)
-            playSource(prevTrackFile.absolutePath, prevTrackName, track.album)
-        } else {
-            mediaPlayer?.seekTo(0)
-        }
+        if (currentIndex > 0) playSource(File(dir, tracks[currentIndex - 1]).absolutePath, tracks[currentIndex - 1], track.album)
+        else mediaPlayer?.seekTo(0)
     }
 
-    fun togglePlay() {
-        notifyInteraction()
-        try {
-            mediaPlayer?.let {
-                if (it.isPlaying) it.pause() else it.start()
-            }
-        } catch (e: Exception) {
-            Log.e("IPOD", "Toggle play failed", e)
-        }
-    }
-
-    fun seek(seconds: Int) {
-        notifyInteraction()
-        try {
-            mediaPlayer?.let {
-                val newPos = it.currentPosition + (seconds * 1000)
-                it.seekTo(newPos.coerceIn(0, it.duration))
-            }
-        } catch (e: Exception) {}
-    }
+    fun togglePlay() { notifyInteraction(); try { mediaPlayer?.let { if (it.isPlaying) it.pause() else it.start() } } catch (e: Exception) {} }
+    fun seek(seconds: Int) { notifyInteraction(); try { mediaPlayer?.let { val newPos = it.currentPosition + (seconds * 1000); it.seekTo(newPos.coerceIn(0, it.duration)) } } catch (e: Exception) {} }
 
     private fun formatTime(ms: Int): String {
-        val totalSeconds = ms / 1000
-        val hours = totalSeconds / 3600
-        val minutes = (totalSeconds % 3600) / 60
-        val seconds = totalSeconds % 60
-        return if (hours > 0) {
-            String.format(Locale.getDefault(), "%d:%02d:%02d", hours, minutes, seconds)
-        } else {
-            String.format(Locale.getDefault(), "%d:%02d", minutes, seconds)
-        }
+        val s = ms / 1000; val h = s / 3600; val m = (s % 3600) / 60; val sec = s % 60
+        return if (h > 0) String.format(Locale.getDefault(), "%d:%02d:%02d", h, m, sec) else String.format(Locale.getDefault(), "%d:%02d", m, sec)
     }
 
     fun updateProgress() {
-        mediaPlayer?.let {
-            try {
-                if (it.isPlaying && it.duration > 0) {
-                    playbackProgress = it.currentPosition.toFloat() / it.duration.toFloat()
-                    currentPositionText = formatTime(it.currentPosition)
-                    durationText = formatTime(it.duration)
-                    
-                    // Save audiobook position
-                    if (currentTrack?.album?.contains("Audiobooks") == true) {
-                        config.audiobookPositions[currentTrack!!.path] = it.currentPosition
-                        onSaveConfig()
-                    }
-                } else if (it.isPlaying) {
-                    currentPositionText = formatTime(it.currentPosition)
-                    durationText = "Live"
-                    playbackProgress = 0f
-                }
-            } catch (e: Exception) {}
-        }
+        mediaPlayer?.let { try {
+            if (it.isPlaying && it.duration > 0) {
+                playbackProgress = it.currentPosition.toFloat() / it.duration.toFloat(); currentPositionText = formatTime(it.currentPosition); durationText = formatTime(it.duration)
+                if (currentTrack?.album?.contains("Audiobooks") == true) { config.audiobookPositions[currentTrack!!.path] = it.currentPosition; onSaveConfig() }
+            } else if (it.isPlaying) { currentPositionText = formatTime(it.currentPosition); durationText = "Live"; playbackProgress = 0f }
+        } catch (e: Exception) {} }
     }
 
     fun releasePlayer() {
-        isNoiseThreadRunning = false
-        try { noiseThread?.join(500) } catch (e: Exception) {}
-        mediaPlayer?.let {
-            try { it.stop() } catch (e: Exception) {}
-            it.release()
-        }
-        mediaPlayer = null
-        sleepTimerThread?.interrupt()
+        isNoiseThreadRunning = false; try { noiseThread?.join(500) } catch (e: Exception) {}
+        mediaPlayer?.let { try { it.stop() } catch (e: Exception) {}; it.release() }
+        mediaPlayer = null; sleepTimerThread?.interrupt()
     }
 
     fun handleBack() {
         notifyInteraction()
         if (isPickingFolder) {
-            if (currentPickPath.contains("/")) {
-                currentPickPath = currentPickPath.substringBeforeLast("/")
-            } else if (currentPickPath.isNotEmpty()) {
-                currentPickPath = ""
-            } else {
-                isPickingFolder = false
-            }
-            selectedIndex = 0
-            return
+            currentPickPath = if (currentPickPath.contains("/")) currentPickPath.substringBeforeLast("/") else if (currentPickPath.isNotEmpty()) "" else { isPickingFolder = false; "" }
+            selectedIndex = 0; return
         }
-
-        if (isAdjustingMix) {
-            isAdjustingMix = false
-        } else if (isNowPlaying) {
-            isNowPlaying = false
-        } else if (menuStack.size > 1) {
-            menuStack.removeAt(menuStack.size - 1)
-            selectedIndex = 0
-        }
+        if (isAdjustingMix) { isAdjustingMix = false } else if (isNowPlaying) { isNowPlaying = false } else if (menuStack.size > 1) { menuStack.removeAt(menuStack.size - 1); selectedIndex = 0 }
     }
 
     fun handleMove(delta: Int) {
         notifyInteraction()
-        if (isAdjustingMix) {
-            noiseLevel = (noiseLevel + delta * 0.02f).coerceIn(0f, 1f)
-            syncVolumes()
-        } else if (isNowPlaying && currentTrack?.album?.contains("Audiobooks") == true) {
-            seek(delta * 5) // seek 5 seconds per tick
-        } else {
-            val items = getCurrentItems()
-            if (items.isNotEmpty()) {
-                selectedIndex = (selectedIndex + delta).coerceIn(0, items.size - 1)
-            }
-        }
+        if (isAdjustingMix) { noiseLevel = (noiseLevel + delta * 0.02f).coerceIn(0f, 1f); syncVolumes() }
+        else if (isNowPlaying && currentTrack?.album?.contains("Audiobooks") == true) { seek(delta * 5) }
+        else { val items = getCurrentItems(); if (items.isNotEmpty()) selectedIndex = (selectedIndex + delta).coerceIn(0, items.size - 1) }
     }
 }
 
 data class Track(val name: String, val artist: String, val album: String, val path: String)
 
-// --- UI Components ---
-
 @Composable
 fun IpodApp(state: IpodState, onSaveConfig: () -> Unit) {
-    BackHandler(enabled = state.menuStack.size > 1 || state.isNowPlaying || state.isPickingFolder) {
-        state.handleBack()
-    }
-
-    // Progress and Inactivity Timer
+    BackHandler(enabled = state.menuStack.size > 1 || state.isNowPlaying || state.isPickingFolder) { state.handleBack() }
     LaunchedEffect(Unit) {
         while (true) {
             if (state.isNowPlaying || state.isActuallyPlaying()) {
                 state.updateProgress()
-                
-                // Return to Now Playing after 15s of inactivity
-                if (!state.isNowPlaying && !state.isPickingFolder && !state.isAdjustingMix) {
-                    val inactiveTime = System.currentTimeMillis() - state.lastInteractionTime
-                    if (inactiveTime > 15000) {
-                        state.isNowPlaying = true
-                    }
-                }
+                if (!state.isNowPlaying && !state.isPickingFolder && !state.isAdjustingMix && System.currentTimeMillis() - state.lastInteractionTime > 15000) state.isNowPlaying = true
             }
             delay(500)
         }
     }
-
-    Box(
-        modifier = Modifier.fillMaxSize(),
-        contentAlignment = Alignment.Center
-    ) {
-        Column(
-            modifier = Modifier
-                .width(340.dp)
-                .height(640.dp)
-                .clip(RoundedCornerShape(40.dp))
-                .background(
-                    Brush.verticalGradient(
-                        colors = listOf(Color(0xFFE6E6E6), Color(0xFFBCBCBC))
-                    )
-                )
-                .padding(25.dp),
-            horizontalAlignment = Alignment.CenterHorizontally
-        ) {
+    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+        Column(modifier = Modifier.width(340.dp).height(640.dp).clip(RoundedCornerShape(40.dp)).background(Brush.verticalGradient(colors = listOf(Color(0xFFE6E6E6), Color(0xFFBCBCBC)))).padding(25.dp), horizontalAlignment = Alignment.CenterHorizontally) {
             IpodScreen(state)
             Spacer(modifier = Modifier.weight(1f))
-            ClickWheel(
-                onScroll = { state.handleMove(it) },
-                onMenu = { state.handleBack() },
-                onSelect = { state.handleSelect(onSaveConfig) },
-                onPlayPause = { state.togglePlay() },
-                onForward = { if (state.isNowPlaying) state.playNextTrack() else state.seek(30) },
-                onBackward = { if (state.isNowPlaying) state.playPreviousTrack() else state.seek(-15) }
-            )
+            ClickWheel(onScroll = { state.handleMove(it) }, onMenu = { state.handleBack() }, onSelect = { state.handleSelect(onSaveConfig) }, onPlayPause = { state.togglePlay() }, onForward = { if (state.isNowPlaying) state.playNextTrack() else state.seek(30) }, onBackward = { if (state.isNowPlaying) state.playPreviousTrack() else state.seek(-15) })
             Spacer(modifier = Modifier.height(20.dp))
         }
     }
@@ -920,70 +751,24 @@ fun IpodApp(state: IpodState, onSaveConfig: () -> Unit) {
 
 @Composable
 fun IpodScreen(state: IpodState) {
-    val screenBg = Color(0xFFB4C3B0)
-    val screenText = Color(0xFF2D3436)
-
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .height(260.dp)
-            .border(4.dp, Color(0xFF333333), RoundedCornerShape(8.dp))
-            .clip(RoundedCornerShape(8.dp))
-            .background(screenBg)
-    ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .background(Color.Black.copy(alpha = 0.1f))
-                .padding(horizontal = 10.dp, vertical = 4.dp),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            val title = when {
-                state.isPickingFolder -> "Pick ${state.pickingTarget} Folder"
-                state.isNowPlaying -> "Now Playing"
-                else -> state.menuStack.last().split("/").last().replaceFirstChar { it.uppercase() }
-            }
+    val screenBg = Color(0xFFB4C3B0); val screenText = Color(0xFF2D3436)
+    Column(modifier = Modifier.fillMaxWidth().height(260.dp).border(4.dp, Color(0xFF333333), RoundedCornerShape(8.dp)).clip(RoundedCornerShape(8.dp)).background(screenBg)) {
+        Row(modifier = Modifier.fillMaxWidth().background(Color.Black.copy(alpha = 0.1f)).padding(horizontal = 10.dp, vertical = 4.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+            val title = when { state.isPickingFolder -> "Pick ${state.pickingTarget} Folder"; state.isNowPlaying -> "Now Playing"; else -> state.menuStack.last().split("/").last().replaceFirstChar { it.uppercase() } }
             Text(text = title, fontSize = 14.sp, fontWeight = FontWeight.Bold, color = screenText, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
-            if (state.sleepMinutesRemaining > 0) {
-                Text(text = "🌙 ${state.sleepMinutesRemaining}m", fontSize = 10.sp, color = screenText, modifier = Modifier.padding(end = 4.dp))
-            }
+            if (state.sleepMinutesRemaining > 0) Text(text = "🌙 ${state.sleepMinutesRemaining}m", fontSize = 10.sp, color = screenText, modifier = Modifier.padding(end = 4.dp))
             Text(text = "${state.batteryLevel}%", fontSize = 12.sp, color = screenText)
         }
-
         Box(modifier = Modifier.fillMaxSize()) {
-            if (state.isAdjustingMix) {
-                AdjustmentView(state.noiseLevel, screenText)
-            } else if (state.isNowPlaying) {
-                NowPlayingView(state, screenText)
-            } else {
-                val items = state.getCurrentItems()
-                val listState = rememberLazyListState()
-                
-                LaunchedEffect(state.selectedIndex, state.isPickingFolder, state.currentPickPath) {
-                    if (items.isNotEmpty()) {
-                        listState.scrollToItem(state.selectedIndex)
-                    }
-                }
-
+            if (state.isAdjustingMix) AdjustmentView(state.noiseLevel, screenText)
+            else if (state.isNowPlaying) NowPlayingView(state, screenText)
+            else {
+                val items = state.getCurrentItems(); val listState = rememberLazyListState()
+                LaunchedEffect(state.selectedIndex, state.isPickingFolder, state.currentPickPath) { if (items.isNotEmpty()) listState.scrollToItem(state.selectedIndex) }
                 LazyColumn(state = listState) {
                     itemsIndexed(items) { index, item ->
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .background(if (index == state.selectedIndex) screenText else Color.Transparent)
-                                .padding(horizontal = 12.dp, vertical = 6.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Text(
-                                text = item,
-                                fontSize = 16.sp,
-                                fontWeight = if (item.startsWith("[ SELECT")) FontWeight.Bold else FontWeight.SemiBold,
-                                color = if (index == state.selectedIndex) screenBg else screenText,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                                modifier = Modifier.weight(1f)
-                            )
+                        Row(modifier = Modifier.fillMaxWidth().background(if (index == state.selectedIndex) screenText else Color.Transparent).padding(horizontal = 12.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Text(text = item, fontSize = 16.sp, fontWeight = if (item.startsWith("[ SELECT")) FontWeight.Bold else FontWeight.SemiBold, color = if (index == state.selectedIndex) screenBg else screenText, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
                         }
                     }
                 }
@@ -994,23 +779,15 @@ fun IpodScreen(state: IpodState) {
 
 @Composable
 fun NowPlayingView(state: IpodState, textColor: Color) {
-    Column(
-        modifier = Modifier.fillMaxSize().padding(15.dp),
-        horizontalAlignment = Alignment.CenterHorizontally
-    ) {
+    Column(modifier = Modifier.fillMaxSize().padding(15.dp), horizontalAlignment = Alignment.CenterHorizontally) {
         Text(text = state.currentTrack?.album ?: "", fontSize = 14.sp, color = textColor.copy(alpha = 0.6f))
         Text(text = state.currentTrack?.name ?: "Unknown", fontSize = 18.sp, fontWeight = FontWeight.Bold, color = textColor, textAlign = TextAlign.Center, maxLines = 2, overflow = TextOverflow.Ellipsis)
         Text(text = state.currentTrack?.artist ?: "", fontSize = 16.sp, color = textColor, textAlign = TextAlign.Center)
         Spacer(modifier = Modifier.weight(1f))
-        
-        Row(
-            modifier = Modifier.fillMaxWidth().padding(bottom = 4.dp),
-            horizontalArrangement = Arrangement.SpaceBetween
-        ) {
+        Row(modifier = Modifier.fillMaxWidth().padding(bottom = 4.dp), horizontalArrangement = Arrangement.SpaceBetween) {
             Text(text = state.currentPositionText, fontSize = 12.sp, color = textColor, fontWeight = FontWeight.Bold)
             Text(text = state.durationText, fontSize = 12.sp, color = textColor, fontWeight = FontWeight.Bold)
         }
-
         Box(modifier = Modifier.fillMaxWidth().height(20.dp).border(2.dp, Color(0xFF333333)).background(Color.Black.copy(alpha = 0.1f))) {
             Box(modifier = Modifier.fillMaxHeight().fillMaxWidth(state.playbackProgress).background(Color(0xFF333333)))
         }
@@ -1031,31 +808,8 @@ fun AdjustmentView(level: Float, textColor: Color) {
 
 @Composable
 fun ClickWheel(onScroll: (Int) -> Unit, onMenu: () -> Unit, onSelect: () -> Unit, onPlayPause: () -> Unit, onForward: () -> Unit, onBackward: () -> Unit) {
-    var lastAngle by remember { mutableFloatStateOf(0f) }
-    var angleAccumulator by remember { mutableFloatStateOf(0f) }
-    val step = 18f 
-
-    Box(
-        modifier = Modifier.size(260.dp).clip(CircleShape).background(Color.White)
-            .pointerInput(Unit) {
-                detectDragGestures(
-                    onDragStart = { offset -> lastAngle = calculateAngle(offset, size.width.toFloat() / 2f, size.height.toFloat() / 2f); angleAccumulator = 0f },
-                    onDrag = { change, _ ->
-                        val currentAngle = calculateAngle(change.position, size.width.toFloat() / 2f, size.height.toFloat() / 2f)
-                        var delta = currentAngle - lastAngle
-                        if (delta > 180f) delta -= 360f else if (delta < -180f) delta += 360f
-                        angleAccumulator += delta
-                        if (kotlin.math.abs(angleAccumulator) >= step) {
-                            val dir = if (angleAccumulator > 0) 1 else -1
-                            onScroll(dir)
-                            angleAccumulator -= step * dir
-                        }
-                        lastAngle = currentAngle
-                    }
-                )
-            },
-        contentAlignment = Alignment.Center
-    ) {
+    var lastAngle by remember { mutableFloatStateOf(0f) }; var angleAccumulator by remember { mutableFloatStateOf(0f) }; val step = 18f
+    Box(modifier = Modifier.size(260.dp).clip(CircleShape).background(Color.White).pointerInput(Unit) { detectDragGestures(onDragStart = { offset -> lastAngle = calculateAngle(offset, size.width.toFloat() / 2f, size.height.toFloat() / 2f); angleAccumulator = 0f }, onDrag = { change, _ -> val currentAngle = calculateAngle(change.position, size.width.toFloat() / 2f, size.height.toFloat() / 2f); var delta = currentAngle - lastAngle; if (delta > 180f) delta -= 360f else if (delta < -180f) delta += 360f; angleAccumulator += delta; if (kotlin.math.abs(angleAccumulator) >= step) { val dir = if (angleAccumulator > 0) 1 else -1; onScroll(dir); angleAccumulator -= step * dir }; lastAngle = currentAngle }) }, contentAlignment = Alignment.Center) {
         Text("MENU", Modifier.align(Alignment.TopCenter).padding(top = 20.dp).clickable { onMenu() }, fontSize = 18.sp, fontWeight = FontWeight.ExtraBold, color = Color(0xFF888888))
         Text("▶▶❘", Modifier.align(Alignment.CenterEnd).padding(end = 20.dp).clickable { onForward() }, fontSize = 18.sp, fontWeight = FontWeight.ExtraBold, color = Color(0xFF888888))
         Text("❘◀◀", Modifier.align(Alignment.CenterStart).padding(start = 20.dp).clickable { onBackward() }, fontSize = 18.sp, fontWeight = FontWeight.ExtraBold, color = Color(0xFF888888))
@@ -1064,8 +818,4 @@ fun ClickWheel(onScroll: (Int) -> Unit, onMenu: () -> Unit, onSelect: () -> Unit
     }
 }
 
-fun calculateAngle(offset: Offset, centerX: Float, centerY: Float): Float {
-    val x = offset.x - centerX
-    val y = offset.y - centerY
-    return (atan2(y, x) * (180f / PI.toFloat()))
-}
+fun calculateAngle(offset: Offset, centerX: Float, centerY: Float): Float { val x = offset.x - centerX; val y = offset.y - centerY; return (atan2(y, x) * (180f / PI.toFloat())) }
