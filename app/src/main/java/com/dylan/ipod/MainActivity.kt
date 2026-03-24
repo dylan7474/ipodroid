@@ -326,6 +326,9 @@ class IpodState(val onSaveConfig: () -> Unit) {
     var noiseType by mutableStateOf("White")
     var batteryLevel by mutableIntStateOf(100)
 
+    // Interaction Timer
+    var lastInteractionTime by mutableLongStateOf(System.currentTimeMillis())
+
     // Sleep Timer State
     var sleepMinutesRemaining by mutableIntStateOf(0)
     private var sleepTimerThread: Thread? = null
@@ -346,6 +349,14 @@ class IpodState(val onSaveConfig: () -> Unit) {
 
     init {
         startNoiseGenerator()
+    }
+
+    fun notifyInteraction() {
+        lastInteractionTime = System.currentTimeMillis()
+    }
+
+    fun isActuallyPlaying(): Boolean {
+        return try { mediaPlayer?.isPlaying == true } catch (e: Exception) { false }
     }
 
     fun startNoiseGenerator() {
@@ -496,6 +507,7 @@ class IpodState(val onSaveConfig: () -> Unit) {
     }
 
     fun handleSelect(onSave: () -> Unit) {
+        notifyInteraction()
         if (isPickingFolder) {
             val items = getCurrentItems()
             val item = items[selectedIndex]
@@ -632,6 +644,7 @@ class IpodState(val onSaveConfig: () -> Unit) {
         try {
             // Safety: isNowPlaying set to true early so UI switches to NowPlayingView immediately
             isNowPlaying = true
+            notifyInteraction()
             currentTrack = Track(name, "iPod Player", album, source)
             playbackProgress = 0f
             currentPositionText = "0:00"
@@ -663,10 +676,12 @@ class IpodState(val onSaveConfig: () -> Unit) {
                     start()
                 }
                 setOnCompletionListener { p ->
-                    if (mediaPlayer == p) isNowPlaying = false
                     if (album.contains("Audiobooks")) {
                         config.audiobookPositions.remove(source)
                         onSaveConfig()
+                    }
+                    if (mediaPlayer == p) {
+                        playNextTrack()
                     }
                     p.release()
                 }
@@ -684,7 +699,61 @@ class IpodState(val onSaveConfig: () -> Unit) {
         }
     }
 
+    fun playNextTrack() {
+        val track = currentTrack ?: return
+        if (track.album == "Radio Stream") return
+
+        val folderItems = scanFolder(track.album)
+        val root = Environment.getExternalStorageDirectory()
+        val dir = if (track.album.isEmpty()) root else File(root, track.album)
+        
+        val tracks = folderItems.filter { name ->
+            val file = File(dir, name)
+            !file.isDirectory && audioExtensions.any { ext -> name.lowercase().endsWith(".$ext") }
+        }
+
+        val currentIndex = tracks.indexOf(track.name)
+        if (currentIndex != -1 && currentIndex < tracks.size - 1) {
+            val nextTrackName = tracks[currentIndex + 1]
+            val nextTrackFile = File(dir, nextTrackName)
+            playSource(nextTrackFile.absolutePath, nextTrackName, track.album)
+        } else {
+            isNowPlaying = false
+        }
+    }
+
+    fun playPreviousTrack() {
+        val track = currentTrack ?: return
+        if (track.album == "Radio Stream") return
+
+        mediaPlayer?.let {
+            if (it.currentPosition > 3000) {
+                it.seekTo(0)
+                return
+            }
+        }
+
+        val folderItems = scanFolder(track.album)
+        val root = Environment.getExternalStorageDirectory()
+        val dir = if (track.album.isEmpty()) root else File(root, track.album)
+        
+        val tracks = folderItems.filter { name ->
+            val file = File(dir, name)
+            !file.isDirectory && audioExtensions.any { ext -> name.lowercase().endsWith(".$ext") }
+        }
+
+        val currentIndex = tracks.indexOf(track.name)
+        if (currentIndex > 0) {
+            val prevTrackName = tracks[currentIndex - 1]
+            val prevTrackFile = File(dir, prevTrackName)
+            playSource(prevTrackFile.absolutePath, prevTrackName, track.album)
+        } else {
+            mediaPlayer?.seekTo(0)
+        }
+    }
+
     fun togglePlay() {
+        notifyInteraction()
         try {
             mediaPlayer?.let {
                 if (it.isPlaying) it.pause() else it.start()
@@ -695,6 +764,7 @@ class IpodState(val onSaveConfig: () -> Unit) {
     }
 
     fun seek(seconds: Int) {
+        notifyInteraction()
         try {
             mediaPlayer?.let {
                 val newPos = it.currentPosition + (seconds * 1000)
@@ -749,6 +819,7 @@ class IpodState(val onSaveConfig: () -> Unit) {
     }
 
     fun handleBack() {
+        notifyInteraction()
         if (isPickingFolder) {
             if (currentPickPath.contains("/")) {
                 currentPickPath = currentPickPath.substringBeforeLast("/")
@@ -772,6 +843,7 @@ class IpodState(val onSaveConfig: () -> Unit) {
     }
 
     fun handleMove(delta: Int) {
+        notifyInteraction()
         if (isAdjustingMix) {
             noiseLevel = (noiseLevel + delta * 0.02f).coerceIn(0f, 1f)
             syncVolumes()
@@ -796,9 +868,20 @@ fun IpodApp(state: IpodState, onSaveConfig: () -> Unit) {
         state.handleBack()
     }
 
-    LaunchedEffect(state.isNowPlaying) {
-        while (state.isNowPlaying) {
-            state.updateProgress()
+    // Progress and Inactivity Timer
+    LaunchedEffect(Unit) {
+        while (true) {
+            if (state.isNowPlaying || state.isActuallyPlaying()) {
+                state.updateProgress()
+                
+                // Return to Now Playing after 15s of inactivity
+                if (!state.isNowPlaying && !state.isPickingFolder && !state.isAdjustingMix) {
+                    val inactiveTime = System.currentTimeMillis() - state.lastInteractionTime
+                    if (inactiveTime > 15000) {
+                        state.isNowPlaying = true
+                    }
+                }
+            }
             delay(500)
         }
     }
@@ -827,8 +910,8 @@ fun IpodApp(state: IpodState, onSaveConfig: () -> Unit) {
                 onMenu = { state.handleBack() },
                 onSelect = { state.handleSelect(onSaveConfig) },
                 onPlayPause = { state.togglePlay() },
-                onForward = { state.seek(30) },
-                onBackward = { state.seek(-15) }
+                onForward = { if (state.isNowPlaying) state.playNextTrack() else state.seek(30) },
+                onBackward = { if (state.isNowPlaying) state.playPreviousTrack() else state.seek(-15) }
             )
             Spacer(modifier = Modifier.height(20.dp))
         }
