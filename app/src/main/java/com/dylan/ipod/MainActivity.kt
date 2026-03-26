@@ -67,13 +67,13 @@ import kotlin.math.atan2
 // --- Models for persistence ---
 data class RadioStation(val name: String, val url: String)
 data class LibraryConfig(
-    var musicPath: String = "Music",
-    var audiobooksPath: String = "Audiobooks",
-    var radioStations: MutableList<RadioStation> = mutableListOf(
+    val musicPath: String = "Music",
+    val audiobooksPath: String = "Audiobooks",
+    val radioStations: List<RadioStation> = listOf(
         RadioStation("Lofi Girl", "https://stream.live.vc.bbc.co.uk/bbc_radio_one"),
         RadioStation("KEXP", "https://kexp-mp3-128.streamguys1.com/kexp128.mp3")
     ),
-    var audiobookPositions: MutableMap<String, Int> = mutableMapOf()
+    val audiobookPositions: Map<String, Int> = mapOf()
 )
 
 class MainActivity : ComponentActivity() {
@@ -94,7 +94,6 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         ipodState = IpodState(onSaveConfig = { saveConfig() })
         
-        // Keep Screen On
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         
         loadConfig()
@@ -379,7 +378,7 @@ class MainActivity : ComponentActivity() {
                                             method: 'POST',
                                             headers: { 'Content-Type': 'application/json' },
                                             body: JSON.stringify({ order: order })
-                                        });
+                                        }).then(r => { if(r.ok) window.location.reload(); });
                                     }
                                 });
                             </script>
@@ -394,7 +393,9 @@ class MainActivity : ComponentActivity() {
                     val name = params["name"]?.trim() ?: ""
                     val url = params["url"]?.trim() ?: ""
                     if (name.isNotEmpty() && url.isNotEmpty()) {
-                        ipodState.config.radioStations.add(RadioStation(name, url))
+                        val updated = ipodState.config.radioStations.toMutableList()
+                        updated.add(RadioStation(name, url))
+                        ipodState.config = ipodState.config.copy(radioStations = updated)
                         saveConfig()
                     }
                     call.respondRedirect("/")
@@ -403,7 +404,9 @@ class MainActivity : ComponentActivity() {
                     val params = call.receiveParameters()
                     val index = params["index"]?.toIntOrNull()
                     if (index != null && index in ipodState.config.radioStations.indices) {
-                        ipodState.config.radioStations.removeAt(index)
+                        val updated = ipodState.config.radioStations.toMutableList()
+                        updated.removeAt(index)
+                        ipodState.config = ipodState.config.copy(radioStations = updated)
                         saveConfig()
                     }
                     call.respondRedirect("/")
@@ -412,11 +415,10 @@ class MainActivity : ComponentActivity() {
                     data class ReorderRequest(val order: List<Int>)
                     try {
                         val request = call.receive<ReorderRequest>()
-                        val current = ipodState.config.radioStations.toList()
+                        val current = ipodState.config.radioStations
                         val reordered = request.order.mapNotNull { current.getOrNull(it) }
                         if (reordered.size == current.size) {
-                            ipodState.config.radioStations.clear()
-                            ipodState.config.radioStations.addAll(reordered)
+                            ipodState.config = ipodState.config.copy(radioStations = reordered)
                             saveConfig()
                             call.respond(HttpStatusCode.OK)
                         } else { call.respond(HttpStatusCode.BadRequest) }
@@ -471,23 +473,18 @@ class IpodState(val onSaveConfig: () -> Unit) {
     var noiseType by mutableStateOf("White")
     var batteryLevel by mutableIntStateOf(100)
 
-    // Interaction Timer
     var lastInteractionTime by mutableLongStateOf(System.currentTimeMillis())
 
-    // Sleep Timer State
     var sleepMinutesRemaining by mutableIntStateOf(0)
     private var sleepTimerThread: Thread? = null
 
-    // Folder Picker State
     var isPickingFolder by mutableStateOf(false)
-    var pickingTarget by mutableStateOf("") // "Music" or "Audiobooks"
-    var currentPickPath by mutableStateOf("") // Path relative to root
+    var pickingTarget by mutableStateOf("")
+    var currentPickPath by mutableStateOf("")
 
-    // Media Player
     private var mediaPlayer: MediaPlayer? = null
     private val audioExtensions = listOf("mp3", "flac", "m4a", "wav", "ogg")
 
-    // Noise Generator
     private var noiseTrack: AudioTrack? = null
     private var noiseThread: Thread? = null
     @Volatile private var isNoiseThreadRunning = false
@@ -592,7 +589,7 @@ class IpodState(val onSaveConfig: () -> Unit) {
         val item = items[selectedIndex]
         if (isPickingFolder) {
             if (item == "[ SELECT CURRENT FOLDER ]") {
-                if (pickingTarget == "Music") config.musicPath = currentPickPath else config.audiobooksPath = currentPickPath
+                config = if (pickingTarget == "Music") config.copy(musicPath = currentPickPath) else config.copy(audiobooksPath = currentPickPath)
                 isPickingFolder = false; onSave(); selectedIndex = 0
             } else { currentPickPath = if (currentPickPath.isEmpty()) item else "$currentPickPath/$item"; selectedIndex = 0 }
             return
@@ -652,11 +649,16 @@ class IpodState(val onSaveConfig: () -> Unit) {
                     it.start() 
                 }
                 setOnCompletionListener { p ->
-                    if (album.contains("Audiobooks")) { config.audiobookPositions.remove(source); onSaveConfig() }
+                    if (album.contains("Audiobooks")) {
+                        val updated = config.audiobookPositions.toMutableMap()
+                        updated.remove(source)
+                        config = config.copy(audiobookPositions = updated)
+                        onSaveConfig()
+                    }
                     if (mediaPlayer == p) playNextTrack()
                     p.release()
                 }
-                setOnErrorListener { p, what, extra -> if (mediaPlayer == p) isNowPlaying = false; p.release(); true }
+                setOnErrorListener { p, _, _ -> if (mediaPlayer == p) isNowPlaying = false; p.release(); true }
                 mediaPlayer = this
             }
         } catch (e: Exception) { Log.e("IPOD", "Playback failed", e); isNowPlaying = false }
@@ -697,7 +699,12 @@ class IpodState(val onSaveConfig: () -> Unit) {
         mediaPlayer?.let { try {
             if (it.isPlaying && it.duration > 0) {
                 playbackProgress = it.currentPosition.toFloat() / it.duration.toFloat(); currentPositionText = formatTime(it.currentPosition); durationText = formatTime(it.duration)
-                if (currentTrack?.album?.contains("Audiobooks") == true) { config.audiobookPositions[currentTrack!!.path] = it.currentPosition; onSaveConfig() }
+                if (currentTrack?.album?.contains("Audiobooks") == true) {
+                    val updated = config.audiobookPositions.toMutableMap()
+                    updated[currentTrack!!.path] = it.currentPosition
+                    config = config.copy(audiobookPositions = updated)
+                    onSaveConfig()
+                }
             } else if (it.isPlaying) { currentPositionText = formatTime(it.currentPosition); durationText = "Live"; playbackProgress = 0f }
         } catch (e: Exception) {} }
     }
@@ -763,8 +770,20 @@ fun IpodScreen(state: IpodState) {
             if (state.isAdjustingMix) AdjustmentView(state.noiseLevel, screenText)
             else if (state.isNowPlaying) NowPlayingView(state, screenText)
             else {
-                val items = state.getCurrentItems(); val listState = rememberLazyListState()
-                LaunchedEffect(state.selectedIndex, state.isPickingFolder, state.currentPickPath) { if (items.isNotEmpty()) listState.scrollToItem(state.selectedIndex) }
+                val items = state.getCurrentItems()
+                val listState = rememberLazyListState()
+                val visibleItemCount = 6
+                LaunchedEffect(state.selectedIndex) {
+                    if (items.isNotEmpty()) {
+                        val firstVisible = listState.firstVisibleItemIndex
+                        val lastVisible = firstVisible + visibleItemCount - 1
+                        if (state.selectedIndex > lastVisible) {
+                            listState.scrollToItem(state.selectedIndex - visibleItemCount + 1)
+                        } else if (state.selectedIndex < firstVisible) {
+                            listState.scrollToItem(state.selectedIndex)
+                        }
+                    }
+                }
                 LazyColumn(state = listState) {
                     itemsIndexed(items) { index, item ->
                         Row(modifier = Modifier.fillMaxWidth().background(if (index == state.selectedIndex) screenText else Color.Transparent).padding(horizontal = 12.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
